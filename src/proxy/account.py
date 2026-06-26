@@ -27,11 +27,16 @@ import json
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from .config import DEFAULT_HOST, DEFAULT_PORT
+
+# token 提前刷新余量（秒）：expiry 距现在不足这个值就当作需要刷新。
+# 对齐 cockpit-tools 的 ensure_fresh_token（300s 余量），比只在过期瞬间刷新更稳。
+REFRESH_SKEW_SECONDS = 300
 
 AUTH_DIR = Path(os.environ.get("CLI_PROXY_AUTH_DIR", Path.home() / ".cli_proxy_api"))
 
@@ -73,6 +78,25 @@ class Account:
     extra_env: dict = field(default_factory=dict)  # 账号 JSON 里 "env": {...} 的任意补充环境变量
     enabled: bool = True
 
+    # ── 路由权重（主备号）──────────────────────────────────────────────────
+    # priority：数字越小越优先；只有当某个 priority 组内全部不可用时才溢出到下一组（备号）。
+    # weight：同一 priority 组内的加权轮换份额（越大命中越多），最小按 1 计。
+    priority: int = 0
+    weight: int = 1
+
+    # ── token 生命周期（持久化）─────────────────────────────────────────────
+    # 直连 HTTP 后端（antigravity_http 等）把 access_token 的过期时间存进来，
+    # 调用前用 needs_refresh() 提前刷新；CLI 型后端（claude/codex…）token 由 CLI 自管，expiry 留 0。
+    expiry: float = 0.0              # access_token 过期的 unix 时间戳（0 = 未知/不追踪）
+
+    # ── 永久禁用（持久化）──────────────────────────────────────────────────
+    # 区别于「冷却」（临时、内存态）：disabled_reason 是 token 彻底失效（如 invalid_grant）这类
+    # 需要人工/刷新才能恢复的问题，落盘后重启不再死磕；下次刷新成功自动解除（见 clear_disabled）。
+    disabled_reason: str = ""        # 非空即视为永久禁用
+    disabled_at: float = 0.0         # 禁用发生的 unix 时间戳
+
+    source_path: str = ""            # 该账号来源的 JSON 文件路径（用于刷新/禁用状态写回；env 兜底账号为空）
+
     # 冷却状态（运行时，不序列化）
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _cooling_until: float = field(default=0.0, init=False, repr=False)
@@ -81,6 +105,20 @@ class Account:
     @property
     def is_cooling(self) -> bool:
         return time.monotonic() < self._cooling_until
+
+    @property
+    def is_disabled(self) -> bool:
+        """永久禁用：显式 enabled=False，或带有 disabled_reason。"""
+        return not self.enabled or bool(self.disabled_reason)
+
+    @property
+    def is_available(self) -> bool:
+        return self.enabled and not self.is_disabled and not self.is_cooling
+
+    @property
+    def is_invalid_grant_disabled(self) -> bool:
+        """因 token 失效（invalid_grant）被禁用——刷新成功后可自动解除。"""
+        return bool(self.disabled_reason) and self.disabled_reason.startswith("invalid_grant")
 
     @property
     def error_count(self) -> int:
@@ -95,6 +133,26 @@ class Account:
         with self._lock:
             self._cooling_until = 0.0
             self._error_count = 0
+
+    def needs_refresh(self, skew_seconds: int = REFRESH_SKEW_SECONDS) -> bool:
+        """access_token 是否需要提前刷新（仅对追踪 expiry 的直连后端有意义）。"""
+        if not self.expiry:
+            return False
+        return time.time() + skew_seconds >= self.expiry
+
+    def disable(self, reason: str) -> None:
+        """永久禁用（落盘语义）：标记原因与时间，并把 enabled 置 False。"""
+        with self._lock:
+            self.enabled = False
+            self.disabled_reason = reason
+            self.disabled_at = time.time()
+
+    def clear_disabled(self) -> None:
+        """解除永久禁用（三个字段一起重置）。"""
+        with self._lock:
+            self.enabled = True
+            self.disabled_reason = ""
+            self.disabled_at = 0.0
 
     def env_override(self) -> dict[str, str]:
         """调 CLI 时注入的环境变量：登录态目录重定向 + token + 额外 env。
@@ -122,11 +180,88 @@ class Account:
             "home": self.home,
             "enabled": self.enabled,
             "cooling": self.is_cooling,
+            "disabled": self.is_disabled,
+            "disabled_reason": self.disabled_reason,
+            "expiry": self.expiry,
+            "priority": self.priority,
+            "weight": self.weight,
             "error_count": self._error_count,
         }
 
+    def persist(self) -> None:
+        """把当前 token / expiry / 禁用状态写回来源 JSON 文件（合并写，保留其它字段）。
+
+        env 兜底账号（无 source_path）静默跳过。供刷新成功后落盘新 token、
+        以及 disable()/clear_disabled() 后持久化禁用态使用，重启后状态不丢。
+        """
+        if not self.source_path:
+            return
+        path = Path(self.source_path)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, json.JSONDecodeError):
+            data = {}
+
+        data["type"] = self.backend
+        if self.token:
+            data["token"] = self.token
+        if self.refresh_token:
+            data["refresh_token"] = self.refresh_token
+        data["enabled"] = self.enabled
+        if self.expiry:
+            data["expiry"] = (
+                datetime.fromtimestamp(self.expiry, tz=timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+        # 禁用态：有原因就写，解除时清掉，避免残留误判
+        if self.disabled_reason:
+            data["disabled_reason"] = self.disabled_reason
+            data["disabled_at"] = self.disabled_at
+        else:
+            data.pop("disabled_reason", None)
+            data.pop("disabled_at", None)
+
+        try:
+            path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except OSError:
+            pass  # 写回失败不致命：内存态仍生效，下次仍会尝试
+
 
 # ── 认证文件加载 ──────────────────────────────────────────────────────────────
+
+def _parse_expiry_ts(value: object) -> float:
+    """把账号文件里的 expiry 解析成 unix 时间戳。
+
+    支持两种写法：ISO8601 字符串（如 "2026-06-27T10:00:00Z"）或纯数字 epoch 秒。
+    无法解析时返回 0.0（= 不追踪过期）。
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return 0.0
+    # 纯数字 → epoch 秒
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
 
 def _account_from_file(path: Path) -> Optional[Account]:
     try:
@@ -145,6 +280,7 @@ def _account_from_file(path: Path) -> Optional[Account]:
     # 既无 token 也无 home 也无 env → 这条目没有任何可注入信息，跳过（占位符文件不会污染池子）。
     if not token and not home and not extra_env:
         return None
+    disabled_reason = str(data.get("disabled_reason", "")).strip()
     return Account(
         backend=backend,
         id=str(data.get("email", path.stem)),
@@ -152,7 +288,14 @@ def _account_from_file(path: Path) -> Optional[Account]:
         refresh_token=str(data.get("refresh_token", "")),
         home=home,
         extra_env=extra_env,
-        enabled=bool(data.get("enabled", True)),
+        # disabled_reason 落盘后，重启仍视为禁用（除非用户手动改 enabled / 删原因）
+        enabled=bool(data.get("enabled", True)) and not disabled_reason,
+        expiry=_parse_expiry_ts(data.get("expiry", data.get("expires_at"))),
+        disabled_reason=disabled_reason,
+        disabled_at=float(data.get("disabled_at", 0.0) or 0.0),
+        priority=int(data.get("priority", 0) or 0),
+        weight=max(1, int(data.get("weight", 1) or 1)),
+        source_path=str(path),
     )
 
 
@@ -203,6 +346,7 @@ def save_account(account: Account, name: Optional[str] = None) -> Path:
     AUTH_DIR.mkdir(parents=True, exist_ok=True)
     stem = name or f"{account.backend}_{account.id.replace('@', '_').replace('.', '_')}"
     path = AUTH_DIR / f"{stem}.json"
+    account.source_path = str(path)
     path.write_text(
         json.dumps(
             {

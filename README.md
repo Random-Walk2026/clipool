@@ -29,8 +29,8 @@ python -m pip install -e /Users/lyzhk/GitHub/cli_proxy
 # 2. 配置账号（见下文）
 
 # 3. 启动服务
-python -m cli_proxy              # 默认 127.0.0.1:8317
-python -m cli_proxy --port 8318  # 指定端口
+python -m proxy              # 默认 127.0.0.1:8317
+python -m proxy --port 8318  # 指定端口
 
 # 4. 调用
 curl http://127.0.0.1:8317/v1/chat/completions \
@@ -48,24 +48,24 @@ curl http://127.0.0.1:8317/v1/chat/completions \
 ```text
 cli_proxy/              # GitHub 仓库根目录
 ├── src/
-│   └── cli_proxy/      # 真正的 Python 包；import cli_proxy 读这里
+│   └── proxy/          # 真正的 Python 包；import proxy 读这里
 ├── docs/
 ├── tests/
 └── pyproject.toml
 ```
 
-这里的 `src/cli_proxy` 不是重复命名：`src` 是源码根目录，里面的 `cli_proxy` 是发布和导入时的包名。保留这个结构可以避免测试时误导入仓库根目录里的文件，也是 Python 包常用做法。
+Python 包名为 `proxy`，CLI 脚本入口仍叫 `cli_proxy`（两者独立，不再同名）。`src` layout 可以避免测试时误导入仓库根目录里的文件，是 Python 包常见做法。
 
 如果运行：
 
 ```bash
-python -m cli_proxy
+python -m proxy
 ```
 
 出现：
 
 ```text
-No module named cli_proxy
+No module named proxy
 ```
 
 说明当前 Python 环境还没有安装本包。先在当前环境执行：
@@ -77,19 +77,19 @@ python -m pip install -e /Users/lyzhk/GitHub/cli_proxy
 再验证：
 
 ```bash
-python -m cli_proxy --help
-cli_proxy --help
+python -m proxy --help
+cli_proxy --help  # CLI 脚本入口名仍是 cli_proxy
 ```
 
 ---
 
 ## Claude Code 接入 Antigravity
 
-`cli_proxy` 现在同时提供 Anthropic-compatible `/v1/messages`，Claude Code 可以把本地代理当成 Anthropic API 使用，实际请求会走你的 Antigravity profile 账号池。
+`proxy` 现在同时提供 Anthropic-compatible `/v1/messages`，Claude Code 可以把本地代理当成 Anthropic API 使用，实际请求会走你的 Antigravity profile 账号池。
 
 ```bash
 # 1. 启动本地代理
-python -m cli_proxy --port 8317
+python -m proxy --port 8317
 
 # 2. 让 Claude Code 指向本地代理
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8317"
@@ -103,7 +103,7 @@ claude --model claude-sonnet-4-6
 
 ```bash
 export CLI_PROXY_API_KEY="your-local-secret"
-python -m cli_proxy --port 8317
+python -m proxy --port 8317
 
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8317"
 export ANTHROPIC_AUTH_TOKEN="your-local-secret"
@@ -112,7 +112,7 @@ claude --model claude-sonnet-4-6
 
 当前实现是 MVP：Claude Code 的 Anthropic SSE 格式已支持，Antigravity 账号池会轮换；优先尝试直连 Cloud Code Assist，token 过期或直连不可用时会退回同 profile 的 `agy --print`。上游返回仍先完整收齐再包装成 SSE，不是逐 token 真流式。复杂 tool_use 的精确回传和 thinking signature 透传还可以继续增强。
 
-教学文档见 [docs/claude_code_agy_tutorial.md](./docs/claude_code_agy_tutorial.md)。
+完整接入指南见 [docs/claude_code_guide.md](./docs/claude_code_guide.md)。
 
 ---
 
@@ -209,7 +209,7 @@ xAI Grok CLI 的认证。来源：`grok login` 后的登录态。
 >
 > Antigravity 是 **Google Cloud Code Assist**（前身为 Cloud Code AI），底层走 `cloudcode-pa.googleapis.com`，使用 Google OAuth2 认证。和普通 `GEMINI_API_KEY` 完全不同——它是 Google 账号的订阅额度，不是 API key 计费。
 
-推荐给每个 Antigravity 账号准备一个独立 profile home，并在账号 JSON 里填写 `home`。`cli_proxy` 会从该 profile 下读取 `antigravity-oauth-token`；如果直连 token 不可用，会退回同 profile 的 `agy --print`。
+推荐给每个 Antigravity 账号准备一个独立 profile home，并在账号 JSON 里填写 `home`。`proxy` 会从该 profile 下读取 `antigravity-oauth-token`；如果直连 token 不可用，会退回同 profile 的 `agy --print`。
 
 ```json
 {
@@ -304,16 +304,16 @@ Antigravity CLI（`agy`）没有独立的 `--effort` 参数，思考强度通过
 ### 方式 A：直接调 runner（无 HTTP 开销，适合同进程内嵌）
 
 ```python
-from cli_proxy.runner import run_cli
+from proxy.runner import run_cli
 
 reply = run_cli("claude", "你好", model="sonnet", effort="high")
 print(reply)
 ```
 
-### 方式 B：HTTP 客户端（先 `python -m cli_proxy` 启动服务）
+### 方式 B：HTTP 客户端（先 `python -m proxy` 启动服务）
 
 ```python
-from cli_proxy import get_client
+from proxy import get_client
 
 client = get_client()   # 默认 http://127.0.0.1:8317/v1
 resp = client.chat.completions.create(
@@ -328,7 +328,7 @@ for chunk in resp:
 ### 方式 C：LangChain 接入（先启动服务）
 
 ```python
-from cli_proxy import get_langchain_model
+from proxy import get_langchain_model
 
 llm = get_langchain_model("claude/sonnet")
 result = llm.invoke("你好")
@@ -422,4 +422,4 @@ curl http://127.0.0.1:8317/health
 | OAuth 自动刷新 | ✅ | 暂不支持 |
 | 直接 HTTP 调用（bypass CLI）| ✅ | Antigravity `/v1/messages` 已支持；OpenAI chat 仍可走 CLI |
 | 真·流式 | ✅ | 模拟（CLI 同步后包装 SSE）|
-| Docker | ✅ | `python -m cli_proxy` |
+| Docker | ✅ | `python -m proxy` |

@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 import requests
 
-from ..account import Account
+from ..account import Account, REFRESH_SKEW_SECONDS
 from ..anthropic import AnthropicMessagesRequest, messages_to_prompt
 from ..config import CLI_TIMEOUT
 from .antigravity import AntigravityProvider, resolve_variant
@@ -144,7 +144,9 @@ def refresh_antigravity_profile_token(token: AntigravityProfileToken) -> Antigra
 
 def load_fresh_antigravity_token(home: str | os.PathLike[str]) -> AntigravityProfileToken:
     token = load_antigravity_profile_token(home)
-    if token.is_expired():
+    # 提前 REFRESH_SKEW_SECONDS（300s）刷新，对齐 cockpit-tools 的 ensure_fresh_token，
+    # 避免「刚好过期瞬间」并发命中导致请求 401。
+    if token.is_expired(REFRESH_SKEW_SECONDS):
         return refresh_antigravity_profile_token(token)
     return token
 
@@ -247,6 +249,12 @@ class AntigravityHTTPProvider:
 
     def _run_direct(self, req: AnthropicMessagesRequest, account: Account) -> str:
         token = load_fresh_antigravity_token(account.home)
+        # 把（可能刚刷新的）过期时间回写账号 registry，供 needs_refresh() 与管理接口展示。
+        if token.expiry is not None:
+            new_expiry = token.expiry.timestamp()
+            if new_expiry != account.expiry:
+                account.expiry = new_expiry
+                account.persist()
         project_id = str(account.extra_env.get("ANTIGRAVITY_PROJECT_ID", "")).strip() or _fetch_project_id(token)
         model = resolve_variant(req.model.removeprefix("antigravity/"), "high")
         body = build_generate_body(req, model=model, project_id=project_id)

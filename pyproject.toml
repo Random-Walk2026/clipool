@@ -49,11 +49,11 @@ Repository = "https://github.com/Random-Walk2026/cli_proxy"
 Issues = "https://github.com/Random-Walk2026/cli_proxy/issues"
 
 [project.scripts]
-cli_proxy = "cli_proxy.__main__:main"
+cli_proxy = "proxy.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["cli_proxy*"]
+include = ["proxy*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

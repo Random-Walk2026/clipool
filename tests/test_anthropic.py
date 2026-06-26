@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 class AnthropicCompatibilityTests(unittest.TestCase):
     def test_messages_endpoint_returns_anthropic_sse(self) -> None:
-        from cli_proxy import server
+        from proxy import server
 
         async def fake_run(req):
             self.assertEqual(req.model, "claude-sonnet-4-6")
@@ -44,7 +44,7 @@ class AnthropicCompatibilityTests(unittest.TestCase):
         self.assertIn("event: message_stop", response.text)
 
     def test_token_file_shape_loaded_from_profile_home(self) -> None:
-        from cli_proxy.providers.antigravity_http import load_antigravity_profile_token
+        from proxy.providers.antigravity_http import load_antigravity_profile_token
 
         with tempfile.TemporaryDirectory() as tmp:
             token_path = (
@@ -77,7 +77,7 @@ class AnthropicCompatibilityTests(unittest.TestCase):
         self.assertFalse(token.is_expired())
 
     def test_messages_to_prompt_keeps_claude_code_blocks(self) -> None:
-        from cli_proxy.anthropic import AnthropicMessagesRequest, messages_to_prompt
+        from proxy.anthropic import AnthropicMessagesRequest, messages_to_prompt
 
         req = AnthropicMessagesRequest(
             model="claude-sonnet-4-6",
@@ -113,9 +113,9 @@ class AnthropicCompatibilityTests(unittest.TestCase):
         self.assertIn("[Tool result toolu_1]\nfile contents", prompt)
 
     def test_antigravity_http_provider_falls_back_to_agy_cli(self) -> None:
-        from cli_proxy.account import Account
-        from cli_proxy.anthropic import AnthropicMessagesRequest
-        from cli_proxy.providers.antigravity_http import AntigravityHTTPProvider
+        from proxy.account import Account
+        from proxy.anthropic import AnthropicMessagesRequest
+        from proxy.providers.antigravity_http import AntigravityHTTPProvider
 
         req = AnthropicMessagesRequest(
             model="claude-sonnet-4-6",
@@ -129,10 +129,10 @@ class AnthropicCompatibilityTests(unittest.TestCase):
         )
 
         with patch(
-            "cli_proxy.providers.antigravity_http.load_fresh_antigravity_token",
+            "proxy.providers.antigravity_http.load_fresh_antigravity_token",
             side_effect=RuntimeError("token expired"),
         ), patch(
-            "cli_proxy.providers.antigravity_http.AntigravityProvider.run",
+            "proxy.providers.antigravity_http.AntigravityProvider.run",
             return_value="cli fallback ok",
         ) as run:
             result = AntigravityHTTPProvider().run_messages(req, account)

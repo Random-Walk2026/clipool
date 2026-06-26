@@ -1,4 +1,4 @@
-"""cli_proxy —— 本地 OpenAI-compatible 代理，把订阅 CLI 变成 HTTP API。
+"""proxy —— 本地 OpenAI-compatible 代理，把订阅 CLI 变成 HTTP API。
 
 架构思路源自 CLIProxyAPI（Go 版），本包是纯 Python 版：
   - 服务端：FastAPI + uvicorn，暴露 /v1/chat/completions（streaming 支持）
@@ -9,12 +9,12 @@
 --------
 启动服务（默认 8317 端口）::
 
-    python -m cli_proxy
-    python -m cli_proxy --port 8318 --host 0.0.0.0
+    python -m proxy
+    python -m proxy --port 8318 --host 0.0.0.0
 
 Python 调用（服务启动后）::
 
-    from cli_proxy import get_client
+    from proxy import get_client
     client = get_client()
     resp = client.chat.completions.create(
         model="claude/sonnet@high",
@@ -24,13 +24,13 @@ Python 调用（服务启动后）::
 
 LangChain 调用::
 
-    from cli_proxy import get_langchain_model
+    from proxy import get_langchain_model
     llm = get_langchain_model("claude/sonnet")
     print(llm.invoke("你好").content)
 
 或直接在代码里不启服务、只调 runner（无 HTTP 开销）::
 
-    from cli_proxy.runner import run_cli
+    from proxy.runner import run_cli
     print(run_cli("claude", "你好", model="sonnet", effort="high"))
 """
 
@@ -50,19 +50,19 @@ __all__ = [
 
 
 def get_client(port: int = DEFAULT_PORT):
-    """返回指向本地 cli_proxy 的 openai.OpenAI 客户端。"""
+    """返回指向本地 proxy 的 openai.OpenAI 客户端。"""
     from openai import OpenAI
 
-    return OpenAI(base_url=f"http://127.0.0.1:{port}/v1", api_key="cli_proxy")
+    return OpenAI(base_url=f"http://127.0.0.1:{port}/v1", api_key="proxy")
 
 
 def get_langchain_model(model: str = "claude/sonnet", port: int = DEFAULT_PORT, **kwargs):
-    """返回指向本地 cli_proxy 的 LangChain ChatOpenAI 模型。"""
+    """返回指向本地 proxy 的 LangChain ChatOpenAI 模型。"""
     from langchain_openai import ChatOpenAI
 
     return ChatOpenAI(
         model=model,
         base_url=f"http://127.0.0.1:{port}/v1",
-        api_key="cli_proxy",
+        api_key="proxy",
         **kwargs,
     )

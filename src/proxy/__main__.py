@@ -1,4 +1,4 @@
-"""入口：python -m cli_proxy [--port 8317] [--host 127.0.0.1]
+"""入口：python -m proxy [--port 8317] [--host 127.0.0.1]
 
 启动后任意 OpenAI-compatible 客户端指向 http://127.0.0.1:8317/v1 即可使用。
 
@@ -31,7 +31,7 @@ def main() -> None:
     print()
 
     uvicorn.run(
-        "cli_proxy.server:app",
+        "proxy.server:app",
         host=args.host,
         port=args.port,
         reload=args.reload,
