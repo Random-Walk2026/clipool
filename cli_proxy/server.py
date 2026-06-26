@@ -33,10 +33,10 @@ from .providers import get_provider, SUPPORTED
 from .providers.antigravity_http import AntigravityHTTPProvider
 from .router import parse_model
 
-app = FastAPI(title="CLI Proxy API", version="2.0.0")
+app = FastAPI(title="cli_proxy API", version="2.0.0")
 
 # CLI subprocess 在专用线程池里跑
-_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cli-proxy")
+_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cli_proxy")
 
 MAX_RETRIES = 3  # 最多尝试几个账号
 _antigravity_http_provider = AntigravityHTTPProvider()
@@ -155,7 +155,7 @@ async def _run_with_pool(
             if account:
                 pool.mark_failed(account, exc)
             print(
-                f"  [cli-proxy] {provider_name}/{acct_id} 失败：{exc}；"
+                f"  [cli_proxy] {provider_name}/{acct_id} 失败：{exc}；"
                 f"{'继续尝试下一个账号…' if _ + 1 < max_retries else '已无可用账号。'}"
             )
 
@@ -217,7 +217,7 @@ async def _run_anthropic_with_pool(
             if account.id != "env-default":
                 pool.mark_failed(account, exc)
             print(
-                f"  [cli-proxy] antigravity/{acct_id} 失败：{exc}；"
+                f"  [cli_proxy] antigravity/{acct_id} 失败：{exc}；"
                 f"{'继续尝试下一个账号…' if _ + 1 < max_retries else '已无可用账号。'}"
             )
 
@@ -242,7 +242,7 @@ async def list_models():
             "id": backend,
             "object": "model",
             "created": 0,
-            "owned_by": "cli-proxy",
+            "owned_by": "cli_proxy",
             "accounts": len(accounts),
         })
     return {"object": "list", "data": data}

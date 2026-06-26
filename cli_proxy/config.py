@@ -1,4 +1,4 @@
-"""CLI Proxy 配置：二进制路径和超时，全部可由 .env 覆盖。"""
+"""cli_proxy 配置：二进制路径和超时，全部可由 .env 覆盖。"""
 from __future__ import annotations
 
 import os

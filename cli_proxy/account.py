@@ -1,6 +1,6 @@
 """账号模型与认证文件管理。
 
-认证文件存放在 AUTH_DIR（默认 ~/.cli-proxy-api/）下，格式与 CLIProxyAPI 兼容：
+认证文件存放在 AUTH_DIR（默认 ~/.cli_proxy_api/）下，格式与 CLIProxyAPI 兼容：
 
     claude_work.json        → Claude 账号，文件名随意（backend 字段决定类型）
     codex_personal.json     → Codex 账号
@@ -18,7 +18,7 @@
 
 也可直接在 .env 里配置单账号（无需文件）：
 
-    CLAUDE_CODE_OAUTH_TOKEN=sk-ant-xxx...   # CLI Proxy 会自动读取
+    CLAUDE_CODE_OAUTH_TOKEN=sk-ant-xxx...   # cli_proxy 会自动读取
     COPILOT_GITHUB_TOKEN=ghp_xxx...
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ from typing import Optional
 
 from .config import DEFAULT_HOST, DEFAULT_PORT
 
-AUTH_DIR = Path(os.environ.get("CLI_PROXY_AUTH_DIR", Path.home() / ".cli-proxy-api"))
+AUTH_DIR = Path(os.environ.get("CLI_PROXY_AUTH_DIR", Path.home() / ".cli_proxy_api"))
 
 # token 型后端：CLI 直接认一个环境变量里的 token，注入不同 token 即切换账号。
 # （codex / antigravity 不在此列——它们没有「一个 token 变量搞定」的入口，靠 _HOME_ENV 目录隔离。）

@@ -1,10 +1,10 @@
 # Account Setup Guide
 
-`cli_proxy` reads account registry files from `~/.cli-proxy-api/` by default.
+`cli_proxy` reads account registry files from `~/.cli_proxy_api/` by default.
 You can override that location with `CLI_PROXY_AUTH_DIR`.
 
 ```text
-~/.cli-proxy-api/
+~/.cli_proxy_api/
 ├── antigravity_1.json
 ├── antigravity_2.json
 ├── claude_work.json
@@ -23,8 +23,8 @@ Antigravity is profile-based. Give each account its own `HOME` directory so the
 CLI writes login state to separate files:
 
 ```bash
-mkdir -p ~/.cli-proxy-api/profiles/agy_main
-HOME="$HOME/.cli-proxy-api/profiles/agy_main" agy -p "ping"
+mkdir -p ~/.cli_proxy_api/profiles/agy_main
+HOME="$HOME/.cli_proxy_api/profiles/agy_main" agy -p "ping"
 ```
 
 Then create an account registry file:
@@ -33,7 +33,7 @@ Then create an account registry file:
 {
   "type": "antigravity",
   "email": "you@example.com",
-  "home": "~/.cli-proxy-api/profiles/agy_main",
+  "home": "~/.cli_proxy_api/profiles/agy_main",
   "enabled": true
 }
 ```
@@ -41,7 +41,7 @@ Then create an account registry file:
 The token file normally lives under:
 
 ```text
-~/.cli-proxy-api/profiles/agy_main/.gemini/antigravity-cli/antigravity-oauth-token
+~/.cli_proxy_api/profiles/agy_main/.gemini/antigravity-cli/antigravity-oauth-token
 ```
 
 `cli_proxy` first tries to use that token directly. If direct HTTP is not
@@ -52,8 +52,8 @@ available, it falls back to `agy --print` with the same profile home.
 Codex is also profile-based:
 
 ```bash
-mkdir -p ~/.cli-proxy-api/profiles/codex_personal
-CODEX_HOME="$HOME/.cli-proxy-api/profiles/codex_personal" codex login
+mkdir -p ~/.cli_proxy_api/profiles/codex_personal
+CODEX_HOME="$HOME/.cli_proxy_api/profiles/codex_personal" codex login
 ```
 
 Account file:
@@ -62,7 +62,7 @@ Account file:
 {
   "type": "codex",
   "email": "you@example.com",
-  "home": "~/.cli-proxy-api/profiles/codex_personal",
+  "home": "~/.cli_proxy_api/profiles/codex_personal",
   "enabled": true
 }
 ```

@@ -1,4 +1,4 @@
-"""CLI Proxy —— 本地 OpenAI-compatible 代理，把订阅 CLI 变成 HTTP API。
+"""cli_proxy —— 本地 OpenAI-compatible 代理，把订阅 CLI 变成 HTTP API。
 
 架构思路源自 CLIProxyAPI（Go 版），本包是纯 Python 版：
   - 服务端：FastAPI + uvicorn，暴露 /v1/chat/completions（streaming 支持）
@@ -50,19 +50,19 @@ __all__ = [
 
 
 def get_client(port: int = DEFAULT_PORT):
-    """返回指向本地 CLI Proxy 的 openai.OpenAI 客户端。"""
+    """返回指向本地 cli_proxy 的 openai.OpenAI 客户端。"""
     from openai import OpenAI
 
-    return OpenAI(base_url=f"http://127.0.0.1:{port}/v1", api_key="cli-proxy")
+    return OpenAI(base_url=f"http://127.0.0.1:{port}/v1", api_key="cli_proxy")
 
 
 def get_langchain_model(model: str = "claude/sonnet", port: int = DEFAULT_PORT, **kwargs):
-    """返回指向本地 CLI Proxy 的 LangChain ChatOpenAI 模型。"""
+    """返回指向本地 cli_proxy 的 LangChain ChatOpenAI 模型。"""
     from langchain_openai import ChatOpenAI
 
     return ChatOpenAI(
         model=model,
         base_url=f"http://127.0.0.1:{port}/v1",
-        api_key="cli-proxy",
+        api_key="cli_proxy",
         **kwargs,
     )

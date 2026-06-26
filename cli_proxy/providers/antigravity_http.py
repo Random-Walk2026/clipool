@@ -153,8 +153,8 @@ def _headers(token: AntigravityProfileToken) -> dict[str, str]:
     return {
         "authorization": f"{token.token_type} {token.access_token}",
         "content-type": "application/json",
-        "user-agent": "cli-proxy/2.0",
-        "x-client-name": "cli-proxy",
+        "user-agent": "cli_proxy/2.0",
+        "x-client-name": "cli_proxy",
         "x-client-version": "2.0",
         "x-machine-id": os.environ.get("CLI_PROXY_MACHINE_ID", uuid.uuid4().hex),
         "x-vscode-sessionid": os.environ.get("CLI_PROXY_SESSION_ID", uuid.uuid4().hex),

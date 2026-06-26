@@ -10,7 +10,7 @@
 
 - [快速上手](#快速上手)
 - [Claude Code 接入 Antigravity](#claude-code-接入-antigravity)
-- [账号配置目录 ~/.cli-proxy-api/](#账号配置目录-cli-proxy-api)
+- [账号配置目录 ~/.cli_proxy_api/](#账号配置目录-cli_proxy_api)
 - [每个 backend 的账号文件格式](#每个-backend-的账号文件格式)
 - [模型字符串格式](#模型字符串格式)
 - [三种调用方式](#三种调用方式)
@@ -74,12 +74,12 @@ claude --model claude-sonnet-4-6
 
 ---
 
-## 账号配置目录 `~/.cli-proxy-api/`
+## 账号配置目录 `~/.cli_proxy_api/`
 
 这是认证文件目录，与 CLIProxyAPI（Go 版）**共用相同路径和格式**，可以互通：
 
 ```
-~/.cli-proxy-api/           # 默认目录（可通过 CLI_PROXY_AUTH_DIR 覆盖）
+~/.cli_proxy_api/           # 默认目录（可通过 CLI_PROXY_AUTH_DIR 覆盖）
 ├── claude_work.json         # 一个 Claude 账号
 ├── claude_personal.json     # 另一个 Claude 账号（自动轮换）
 ├── codex_main.json          # Codex 账号
@@ -95,7 +95,7 @@ claude --model claude-sonnet-4-6
 **权限建议**：
 
 ```bash
-chmod 600 ~/.cli-proxy-api/*.json   # 保护 token 文件
+chmod 600 ~/.cli_proxy_api/*.json   # 保护 token 文件
 ```
 
 ---
@@ -173,7 +173,7 @@ xAI Grok CLI 的认证。来源：`grok login` 后的登录态。
 {
     "type": "antigravity",
     "email": "you@google.com",
-    "home": "~/.cli-proxy-api/profiles/agy_main",
+    "home": "~/.cli_proxy_api/profiles/agy_main",
     "enabled": true
 }
 ```
@@ -181,7 +181,7 @@ xAI Grok CLI 的认证。来源：`grok login` 后的登录态。
 profile 内的 token 文件路径通常是：
 
 ```text
-~/.cli-proxy-api/profiles/agy_main/.gemini/antigravity-cli/antigravity-oauth-token
+~/.cli_proxy_api/profiles/agy_main/.gemini/antigravity-cli/antigravity-oauth-token
 ```
 
 ---
@@ -337,7 +337,7 @@ curl http://127.0.0.1:8317/health
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `CLI_PROXY_AUTH_DIR` | `~/.cli-proxy-api` | 认证文件目录 |
+| `CLI_PROXY_AUTH_DIR` | `~/.cli_proxy_api` | 认证文件目录 |
 | `AGENT_LLM_CLI_TIMEOUT` | `600` | CLI 调用超时（秒）|
 | `CLAUDE_CLI_BIN` | `claude` | Claude CLI 可执行文件路径 |
 | `CODEX_CLI_BIN` | `codex` | Codex CLI 可执行文件路径 |
@@ -371,7 +371,7 @@ curl http://127.0.0.1:8317/health
 
 | 特性 | CLIProxyAPI（Go）| cli_proxy（Python）|
 |------|-----------------|-------------------|
-| 认证文件目录 | `~/.cli-proxy-api/` | `~/.cli-proxy-api/`（相同）|
+| 认证文件目录 | `~/.cli_proxy_api/` | `~/.cli_proxy_api/`（相同）|
 | 认证文件格式 | JSON，`type` 字段 | JSON，`type` 字段（相同）|
 | 多账号轮换 | ✅ | ✅ |
 | 冷却/重试 | ✅ | ✅ |

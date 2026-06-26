@@ -20,7 +20,7 @@ env/
 .env
 .env.*
 !.env.example
-.cli-proxy-api/
+.cli_proxy_api/
 profiles/
 *oauth-token*
 auth.json

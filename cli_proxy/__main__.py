@@ -18,14 +18,14 @@ from .server import app
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="CLI Proxy API — 本地 OpenAI-compatible 代理，路由到订阅 CLI"
+        description="cli_proxy API — 本地 OpenAI-compatible 代理，路由到订阅 CLI"
     )
     parser.add_argument("--port", type=int, default=8317, help="监听端口（默认 8317）")
     parser.add_argument("--host", default="127.0.0.1", help="绑定地址（默认 127.0.0.1）")
     parser.add_argument("--reload", action="store_true", help="代码变更时自动重载（开发用）")
     args = parser.parse_args()
 
-    print(f"CLI Proxy API  →  http://{args.host}:{args.port}/v1")
+    print(f"cli_proxy API  →  http://{args.host}:{args.port}/v1")
     print(f"支持后端：claude / codex / grok / antigravity / copilot")
     print(f"模型格式：<backend>/<model>@<effort>，如 claude/sonnet@high")
     print()

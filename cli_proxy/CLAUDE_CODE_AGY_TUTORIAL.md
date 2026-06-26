@@ -8,7 +8,7 @@
 
 1. 暴露本地 HTTP 服务：`http://127.0.0.1:8317/v1/messages`
 2. 兼容 Claude Code 的 Anthropic API 请求格式
-3. 从 `~/.cli-proxy-api/` 读取多个 Antigravity profile，按账号池轮换使用
+3. 从 `~/.cli_proxy_api/` 读取多个 Antigravity profile，按账号池轮换使用
 
 调用链是：
 
@@ -28,7 +28,7 @@ Claude Code
 `cli_proxy` 默认读取：
 
 ```text
-~/.cli-proxy-api/
+~/.cli_proxy_api/
 ├── antigravity_1.json
 ├── antigravity_2.json
 ├── antigravity_3.json
@@ -46,7 +46,7 @@ Claude Code
 {
   "type": "antigravity",
   "email": "account@example.com",
-  "home": "~/.cli-proxy-api/profiles/agy_main",
+  "home": "~/.cli_proxy_api/profiles/agy_main",
   "enabled": true
 }
 ```
@@ -54,7 +54,7 @@ Claude Code
 真正的 OAuth token 在：
 
 ```text
-~/.cli-proxy-api/profiles/agy_main/.gemini/antigravity-cli/antigravity-oauth-token
+~/.cli_proxy_api/profiles/agy_main/.gemini/antigravity-cli/antigravity-oauth-token
 ```
 
 `cli_proxy` 会读取这个文件里的 `access_token`、`refresh_token` 和 `expiry`。token 没过期时直接用；过期时会尝试刷新。如果没有配置刷新所需的 OAuth client env，就会提示你重新用 `agy` 登录对应 profile。
@@ -279,8 +279,8 @@ echo "$ANTHROPIC_AUTH_TOKEN"
 检查账号 JSON 的 `home` 是否是正确 profile：
 
 ```bash
-cat ~/.cli-proxy-api/antigravity_1.json
-find ~/.cli-proxy-api/profiles/agy_main -name antigravity-oauth-token
+cat ~/.cli_proxy_api/antigravity_1.json
+find ~/.cli_proxy_api/profiles/agy_main -name antigravity-oauth-token
 ```
 
 ### 3. token 过期
@@ -288,7 +288,7 @@ find ~/.cli-proxy-api/profiles/agy_main -name antigravity-oauth-token
 重新登录对应 profile：
 
 ```bash
-HOME="$HOME/.cli-proxy-api/profiles/agy_main" agy -p "ping"
+HOME="$HOME/.cli_proxy_api/profiles/agy_main" agy -p "ping"
 ```
 
 如果弹出 Keychain 相关窗口，继续按你原来的方式让 token 落到 profile 文件里。
