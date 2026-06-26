@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cli_proxy"
+version = "0.1.0"
+description = "Local OpenAI/Anthropic-compatible proxy for subscription CLIs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "cli_proxy contributors" }
+]
+keywords = ["fastapi", "claude-code", "openai-compatible", "anthropic", "cli"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: FastAPI",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "fastapi>=0.110",
+  "pydantic>=2",
+  "requests>=2.31",
+  "uvicorn[standard]>=0.27",
+]
+
+[project.optional-dependencies]
+client = [
+  "openai>=1.0",
+]
+langchain = [
+  "langchain-openai>=0.1",
+]
+dev = [
+  "httpx>=0.27",
+  "pytest>=8",
+]
+
+[project.urls]
+Homepage = "https://github.com/Random-Walk2026/cli_proxy"
+Repository = "https://github.com/Random-Walk2026/cli_proxy"
+Issues = "https://github.com/Random-Walk2026/cli_proxy/issues"
+
+[project.scripts]
+cli-proxy = "cli_proxy.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["cli_proxy*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
