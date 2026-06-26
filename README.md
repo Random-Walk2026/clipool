@@ -70,7 +70,7 @@ claude --model claude-sonnet-4-6
 
 当前实现是 MVP：Claude Code 的 Anthropic SSE 格式已支持，Antigravity 账号池会轮换；优先尝试直连 Cloud Code Assist，token 过期或直连不可用时会退回同 profile 的 `agy --print`。上游返回仍先完整收齐再包装成 SSE，不是逐 token 真流式。复杂 tool_use 的精确回传和 thinking signature 透传还可以继续增强。
 
-教学文档见 [cli_proxy/CLAUDE_CODE_AGY_TUTORIAL.md](./cli_proxy/CLAUDE_CODE_AGY_TUTORIAL.md)。
+教学文档见 [docs/claude_code_agy_tutorial.md](./docs/claude_code_agy_tutorial.md)。
 
 ---
 

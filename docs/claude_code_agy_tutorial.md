@@ -118,7 +118,7 @@ claude --model claude-sonnet-4-6
 
 ### 1. 路由函数就是协议适配层
 
-`cli_proxy/server.py` 里的核心路由是：
+`src/cli_proxy/server.py` 里的核心路由是：
 
 ```python
 @app.post("/v1/messages")
@@ -138,7 +138,7 @@ async def anthropic_messages(req: AnthropicMessagesRequest, request: Request):
 
 ### 2. Pydantic model 负责接住外部协议
 
-`AnthropicMessagesRequest` 放在 `cli_proxy/anthropic.py`：
+`AnthropicMessagesRequest` 放在 `src/cli_proxy/anthropic.py`：
 
 ```python
 class AnthropicMessagesRequest(BaseModel):
@@ -211,20 +211,20 @@ curl http://127.0.0.1:8317/v1/messages \
 关键文件：
 
 ```text
-cli_proxy/server.py
+src/cli_proxy/server.py
   FastAPI 路由。新增了 /v1/messages 和 /v1/messages/count_tokens。
 
-cli_proxy/anthropic.py
+src/cli_proxy/anthropic.py
   Anthropic 请求和响应 helper。负责把 Claude Code 的 system/messages/tool_result
   归一化成 prompt，并生成 Anthropic SSE 事件。
 
-cli_proxy/providers/antigravity_http.py
+src/cli_proxy/providers/antigravity_http.py
   直接读取 Antigravity profile token，调用 Cloud Code Assist HTTP API。
 
-cli_proxy/account.py
+src/cli_proxy/account.py
   账号文件加载。antigravity 使用 home/profile 目录隔离账号。
 
-cli_proxy/pool.py
+src/cli_proxy/pool.py
   多账号轮换和失败冷却。
 ```
 

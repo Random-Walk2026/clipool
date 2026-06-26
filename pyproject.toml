@@ -52,6 +52,7 @@ Issues = "https://github.com/Random-Walk2026/cli_proxy/issues"
 cli_proxy = "cli_proxy.__main__:main"
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["cli_proxy*"]
 
 [tool.pytest.ini_options]
