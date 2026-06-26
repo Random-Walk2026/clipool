@@ -23,8 +23,8 @@
 ## 快速上手
 
 ```bash
-# 1. 安装依赖
-pip install fastapi "uvicorn[standard]"
+# 1. 安装本包（开发模式）
+python -m pip install -e /Users/lyzhk/GitHub/cli_proxy
 
 # 2. 配置账号（见下文）
 
@@ -37,6 +37,48 @@ curl http://127.0.0.1:8317/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer any-value" \
   -d '{"model":"claude/sonnet@high","messages":[{"role":"user","content":"你好"}]}'
+```
+
+---
+
+## 目录结构说明
+
+本仓库使用 Python 公共包常见的 `src` layout：
+
+```text
+cli_proxy/              # GitHub 仓库根目录
+├── src/
+│   └── cli_proxy/      # 真正的 Python 包；import cli_proxy 读这里
+├── docs/
+├── tests/
+└── pyproject.toml
+```
+
+这里的 `src/cli_proxy` 不是重复命名：`src` 是源码根目录，里面的 `cli_proxy` 是发布和导入时的包名。保留这个结构可以避免测试时误导入仓库根目录里的文件，也是 Python 包常用做法。
+
+如果运行：
+
+```bash
+python -m cli_proxy
+```
+
+出现：
+
+```text
+No module named cli_proxy
+```
+
+说明当前 Python 环境还没有安装本包。先在当前环境执行：
+
+```bash
+python -m pip install -e /Users/lyzhk/GitHub/cli_proxy
+```
+
+再验证：
+
+```bash
+python -m cli_proxy --help
+cli_proxy --help
 ```
 
 ---
