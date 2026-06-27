@@ -37,8 +37,11 @@ from .router import parse_model
 
 app = FastAPI(title="cli_proxy API", version="2.0.0")
 
-# 自包含的账号状态仪表盘（静态 HTML，无构建步骤），与 Streamlit 管理台同放在 ui/ 下
-_UI_DIR = Path(__file__).parent / "ui"
+# 账号状态仪表盘 / Streamlit 管理台放在仓库根目录的 ui/ 下（不随包分发）。
+# 默认从源码树定位（src/proxy/server.py → 上两级是仓库根），可用 CLI_PROXY_UI_DIR 覆盖。
+_UI_DIR = Path(
+    os.environ.get("CLI_PROXY_UI_DIR") or (Path(__file__).resolve().parents[2] / "ui")
+)
 
 # CLI subprocess 在专用线程池里跑
 _executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cli_proxy")

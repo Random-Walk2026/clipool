@@ -272,7 +272,10 @@ function quotaBlock(a) {
   }
   const q = a.quota;
   const plan = q.plan_type ? `<span class="plan">${esc(q.plan_type)}</span>` : "";
-  const bars = qbar("5 小时", q.five_hour) + qbar("本周", q.weekly);
+  // antigravity 用 windows 列表（多组 5h/周）；codex/claude 用 five_hour/weekly。
+  const bars = Array.isArray(q.windows) && q.windows.length
+    ? q.windows.map(w => qbar(w.label, w)).join("")
+    : qbar("5 小时", q.five_hour) + qbar("本周", q.weekly);
   return `<div class="quota">
     <div class="qhead"><span>额度</span>${plan}</div>
     ${bars || '<div class="qnone">无额度窗口数据</div>'}

@@ -18,8 +18,14 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Optional
+
 from ..config import ANTIGRAVITY_BIN
 from .base import BaseProvider
+
+# agy 登录态文件（相对 HOME）。没有它就别跑 agy——否则 agy 会弹浏览器要 OAuth 登录。
+_AGY_TOKEN_RELATIVE = Path(".gemini") / "antigravity-cli" / "antigravity-oauth-token"
 
 _EFFORT_SUFFIXES = ("low", "medium", "high", "thinking")
 
@@ -80,6 +86,24 @@ class AntigravityProvider(BaseProvider):
 
     name = "antigravity"
     label = "Antigravity"
+
+    def run(self, text, model="", effort="", *, env_override=None):
+        # 跑 agy 前先确认该账号 home 下有 OAuth 登录态：没有就直接报错，
+        # 绝不让 agy 进入交互式登录弹出浏览器（曾因 home 指向空目录误触发）。
+        self._ensure_logged_in(env_override)
+        return super().run(text, model, effort, env_override=env_override)
+
+    @staticmethod
+    def _ensure_logged_in(env_override: Optional[dict]) -> None:
+        home = (env_override or {}).get("HOME", "").strip()
+        if not home:
+            return  # 未注入独立 home → 用 agy 默认登录态，交给 agy 自己判断
+        token_file = Path(home).expanduser() / _AGY_TOKEN_RELATIVE
+        if not token_file.exists():
+            raise RuntimeError(
+                f"Antigravity 账号未登录：{token_file} 不存在。"
+                f"请先用该 profile 登录（agy login，HOME={home}），跳过以避免触发浏览器登录。"
+            )
 
     def _build_cmd(self, text: str, model: str, effort: str) -> list[str]:
         cmd = [ANTIGRAVITY_BIN, "--print", text]

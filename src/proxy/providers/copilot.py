@@ -23,3 +23,13 @@ class CopilotProvider(BaseProvider):
         if model:
             cmd += ["--model", model]
         return cmd
+
+    def run(self, text, model="", effort="", *, env_override=None):
+        try:
+            return super().run(text, model, effort, env_override=env_override)
+        except RuntimeError as exc:
+            # Copilot 可用模型随订阅变化；指定模型无效时回退到 CLI 默认模型再试一次，
+            # 保证工作流不因模型名不符而中断（对齐 GrokProvider 的处理）。
+            if model and "not available" in str(exc).lower():
+                return super().run(text, "", effort, env_override=env_override)
+            raise

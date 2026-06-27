@@ -227,6 +227,8 @@ profile 内的 token 文件路径通常是：
 ~/.cli_proxy_api/profiles/agy_main/.gemini/antigravity-cli/antigravity-oauth-token
 ```
 
+> ⚠️ `home` 必须指向一个**已登录**的 agy profile（其下存在上面那个 `antigravity-oauth-token`，且目录名是下划线的 `.cli_proxy_api`）。否则 `proxy` 在调用前会直接报「账号未登录」并跳过该账号——**不会**让 `agy` 进入交互式登录、不会弹浏览器。给新 profile 登录：`HOME=~/.cli_proxy_api/profiles/agy_x agy`（按提示完成一次 OAuth）。
+
 ---
 
 ### Copilot（copilot_*.json）
@@ -282,6 +284,8 @@ gemini-3.5-flash(high)      → 自动推断为 antigravity/gemini-3.5-flash@hig
 | `gpt-*`, `o1`, `o3`, `o4*` | `codex` |
 | `grok-*` | `grok` |
 | `gemini-*` | `antigravity` |
+
+> 💡 **模型名容错**：`grok` / `copilot` 的可用模型随订阅变化（例如 grok CLI 实际只有 `grok-build`、`grok-composer-2.5-fast`）。当请求的模型名 CLI 不认（`unknown model id` / `not available`）时，`proxy` 会**自动回退到该 CLI 的默认模型**重试一次，保证工作流不因模型名不符而中断。
 
 ---
 
@@ -357,7 +361,7 @@ curl -X POST http://127.0.0.1:8317/v0/management/accounts/action \
   -H "Content-Type: application/json" \
   -d '{"backend":"claude","id":"work@example.com","action":"disable"}'
 
-# 刷新所有账号的额度（5 小时 / 周；目前支持 codex / claude）
+# 刷新所有账号的额度（5 小时 / 周；目前支持 codex / claude / antigravity）
 curl -X POST http://127.0.0.1:8317/v0/management/quota/refresh
 
 # 查看可用模型列表
@@ -398,14 +402,18 @@ curl http://127.0.0.1:8317/health
 
 点「刷新额度」可拉取各账号的 **5 小时 / 周额度**（进度条 + 重置倒计时 + 套餐类型）。额度查询较慢且有限流，因此不随状态自动刷新，按需手动触发。
 
-目前支持 **codex** 和 **claude**：
+目前支持 **codex**、**claude** 和 **antigravity**：
 
-| backend | usage 端点 | token 策略 |
+| backend | 数据来源 | 说明 |
 | --- | --- | --- |
-| codex | `chatgpt.com/backend-api/wham/usage` | 每次用 `refresh_token` 刷新后查询 |
+| codex | `chatgpt.com/backend-api/wham/usage` | 每次用 `refresh_token` 刷新后查询；primary=5h、secondary=周 |
 | claude | `api.anthropic.com/api/oauth/usage`（需 `anthropic-beta` + `User-Agent`） | 先用现有 token 查，401 才刷新（刷新端点限流严，避免空刷） |
+| antigravity | 本地 `agy` 语言服务 `RetrieveUserQuotaSummary`（127.0.0.1，Connect 协议） | 反映「当前本地登录的 agy 账号」，按 email 匹配挂到对应账号；分 Gemini / Claude&GPT 两组各 5h+周 |
 
-其余 backend（grok / copilot / antigravity）暂无公开 usage 端点，不显示额度。Claude 的 `User-Agent` 版本号可用 `CLI_PROXY_CLAUDE_CODE_VERSION` 覆盖。
+其余 backend（grok / copilot）暂无可用 usage 入口，不显示额度。说明：
+
+- antigravity 需要本机正在运行 `agy`（它没有公开 HTTP usage 端点，额度只能从本地服务取，这也正是 `agy` TUI 里 `/usage` 的数据来源）。本地服务只有一个登录态，因此只会给 email 匹配的那个账号显示额度，其余账号提示去 `agy` 切换账号。
+- Claude 的 `User-Agent` 版本号可用 `CLI_PROXY_CLAUDE_CODE_VERSION` 覆盖。
 
 **② Streamlit 管理台（带操作按钮）**
 
@@ -413,7 +421,7 @@ curl http://127.0.0.1:8317/health
 
 ```bash
 python -m pip install -e ".[ui]"            # 安装 streamlit
-python -m streamlit run src/proxy/ui/streamlit_app.py
+python -m streamlit run ui/streamlit_app.py
 ```
 
 默认连接 <http://127.0.0.1:8317>，可用 `CLI_PROXY_URL` 环境变量或左侧栏修改；若服务设了 `CLI_PROXY_API_KEY`，在左侧栏填入即可。操作按钮通过 `/v0/management/accounts/action` 端点生效并落盘，含每账号「额度」按钮与左侧栏「刷新额度」批量按钮，额度以进度条展示 5 小时 / 周用量。

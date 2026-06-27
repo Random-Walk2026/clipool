@@ -30,6 +30,8 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
+import subprocess
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -37,6 +39,14 @@ from typing import Optional
 import requests
 
 from .account import Account
+
+# 本地 agy 服务用自签名证书，verify=False 会刷 InsecureRequestWarning；只关这一类警告。
+try:  # pragma: no cover - 取决于 urllib3 版本
+    import urllib3
+
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except Exception:  # noqa: BLE001
+    pass
 
 # ── Codex（ChatGPT 订阅）────────────────────────────────────────────────────
 CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -51,8 +61,17 @@ CLAUDE_OAUTH_BETA = "oauth-2025-04-20"
 # usage / 刷新端点都在 Cloudflare 后面，缺 User-Agent 会被 1010 拒绝；可用 env 覆盖版本号。
 CLAUDE_USER_AGENT = f"claude-code/{os.environ.get('CLI_PROXY_CLAUDE_CODE_VERSION', '2.1.0')}"
 
+# ── Antigravity（本地 agy 语言服务）─────────────────────────────────────────
+# agy CLI 在本地起一个 language server（Connect 协议，自签名 HTTPS）。和 codex/claude 不同，
+# 它没有公开 usage HTTP 端点——额度只能从这个本地服务取，反映「当前本地登录的那个 agy 账号」。
+# 因此 antigravity 额度按 email 匹配挂到对应账号；其余账号会提示「本地未登录此账号」。
+ANTIGRAVITY_QUOTA_PATH = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+ANTIGRAVITY_STATUS_PATH = "/exa.language_server_pb.LanguageServerService/GetUserStatus"
+_AGY_WINDOW_ORDER = {"5h": 0, "weekly": 1}  # 每组内 5 小时窗口排在周窗口前（对齐 CodexBar 展示）
+_agy_cache: dict = {"ts": 0.0, "snap": None}  # 本地快照短缓存，避免批量刷新时重复 ps/lsof
+
 # 哪些 backend 支持额度查询（其余返回 None）
-QUOTA_SUPPORTED: frozenset[str] = frozenset({"codex", "claude"})
+QUOTA_SUPPORTED: frozenset[str] = frozenset({"codex", "claude", "antigravity"})
 
 _HTTP_TIMEOUT = 30
 
@@ -276,11 +295,143 @@ def _fetch_claude_quota(account: Account, pre_refresh: bool = False) -> dict:
     }
 
 
+# ── Antigravity（本地 agy 语言服务）─────────────────────────────────────────
+
+def _agy_listening_ports() -> list[int]:
+    """找到本地 agy / language_server 进程并用 lsof 列出其监听端口。"""
+    try:
+        ps = subprocess.run(
+            ["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=10
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids: list[str] = []
+    for line in ps.splitlines():
+        if "grep" in line:
+            continue
+        if re.search(r"(^|[/\s])agy(\s|$)|language_server", line, re.IGNORECASE):
+            m = re.match(r"\s*(\d+)", line)
+            if m:
+                pids.append(m.group(1))
+    lsof = next((p for p in ("/usr/sbin/lsof", "/usr/bin/lsof") if os.path.exists(p)), None)
+    if not lsof or not pids:
+        return []
+    ports: set[int] = set()
+    for pid in pids:
+        try:
+            out = subprocess.run(
+                [lsof, "-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", pid],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+        ports.update(int(m.group(1)) for m in re.finditer(r":(\d+)\s+\(LISTEN\)", out))
+    return sorted(ports)
+
+
+def _agy_post(port: int, path: str, body: dict) -> Optional[dict]:
+    """向本地 agy 服务发 Connect 请求（自签名 HTTPS，跳过证书校验）。失败返回 None。"""
+    try:
+        resp = requests.post(
+            f"https://127.0.0.1:{port}{path}",
+            json=body,
+            headers={"Content-Type": "application/json", "Connect-Protocol-Version": "1"},
+            timeout=8,
+            verify=False,
+        )
+    except requests.RequestException:
+        return None
+    if resp.status_code != 200:
+        return None
+    try:
+        return resp.json()
+    except ValueError:
+        return None
+
+
+def _parse_agy_groups(groups: list) -> list[dict]:
+    """把 agy 的 groups/buckets 拍平成有序的窗口列表（每组：5 小时、本周）。"""
+    windows: list[dict] = []
+    for g in groups:
+        if not isinstance(g, dict):
+            continue
+        gname = str(g.get("displayName") or "Quota").strip()
+        buckets = sorted(
+            (b for b in g.get("buckets", []) if isinstance(b, dict)),
+            key=lambda b: _AGY_WINDOW_ORDER.get(b.get("window"), 9),
+        )
+        for b in buckets:
+            rf = b.get("remainingFraction")
+            used = max(0, min(100, round((1 - rf) * 100))) if isinstance(rf, (int, float)) else None
+            wname = str(b.get("displayName") or b.get("window") or "").strip()
+            windows.append({
+                "label": f"{gname} · {wname}".strip(" ·"),
+                "used_percent": used,
+                "reset_at": _iso_to_ts(b.get("resetTime")),
+            })
+    return windows
+
+
+def _agy_plan_label(user_status: dict) -> Optional[str]:
+    plan_info = (user_status.get("planStatus") or {}).get("planInfo") or {}
+    name = plan_info.get("planName")
+    return str(name) if name else None
+
+
+def _fetch_antigravity_local() -> dict:
+    """从本地 agy 服务取 {email, plan, windows}。带 15s 短缓存避免重复探测。"""
+    if _agy_cache["snap"] and time.time() - _agy_cache["ts"] < 15:
+        return _agy_cache["snap"]
+    ports = _agy_listening_ports()
+    if not ports:
+        raise RuntimeError("本地 agy 未运行或未监听端口，请先在终端运行 agy 登录后重试")
+    status_body = {"metadata": {
+        "ideName": "antigravity", "extensionName": "antigravity",
+        "ideVersion": "unknown", "locale": "en",
+    }}
+    for port in ports:
+        quota = _agy_post(port, ANTIGRAVITY_QUOTA_PATH, {"forceRefresh": True})
+        if not quota or "response" not in quota:
+            continue
+        status = _agy_post(port, ANTIGRAVITY_STATUS_PATH, status_body) or {}
+        user_status = status.get("userStatus") or {}
+        snap = {
+            "email": user_status.get("email"),
+            "plan": _agy_plan_label(user_status),
+            "windows": _parse_agy_groups(quota["response"].get("groups", [])),
+        }
+        _agy_cache.update(ts=time.time(), snap=snap)
+        return snap
+    raise RuntimeError("本地 agy 在运行但额度端点无响应（可能未登录或版本不符）")
+
+
+def _fetch_antigravity_quota(account: Account, pre_refresh: bool = False) -> dict:
+    """从本地 agy 服务取额度，并按 email 匹配到当前账号。
+
+    本地服务只反映「当前登录的那个 agy 账号」，所以仅当账号 email 与本地一致时返回额度，
+    否则明确提示去 agy 切换账号——避免把别人的额度错挂到本账号上。
+    """
+    snap = _fetch_antigravity_local()
+    local_email = str(snap.get("email") or "").strip().lower()
+    if local_email and account.id.strip().lower() != local_email:
+        raise RuntimeError(
+            f"本地 agy 当前登录的是 {snap['email']}，无法获取此账号（{account.id}）的额度；"
+            f"请在 agy 切换到该账号后重试"
+        )
+    return {
+        "plan_type": snap.get("plan"),
+        "windows": snap.get("windows") or [],
+        "five_hour": None,
+        "weekly": None,
+    }
+
+
 # ── 调度 ──────────────────────────────────────────────────────────────────────
 
 _FETCHERS = {
     "codex": _fetch_codex_quota,
     "claude": _fetch_claude_quota,
+    "antigravity": _fetch_antigravity_quota,
 }
 
 

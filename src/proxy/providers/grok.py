@@ -17,3 +17,13 @@ class GrokProvider(BaseProvider):
         if model:
             cmd += ["-m", model]
         return cmd
+
+    def run(self, text, model="", effort="", *, env_override=None):
+        try:
+            return super().run(text, model, effort, env_override=env_override)
+        except RuntimeError as exc:
+            # grok CLI 的模型清单随订阅变化（如没有 grok-4）；指定模型无效时
+            # 回退到 CLI 默认模型再试一次，保证工作流不因模型名不符而中断。
+            if model and "unknown model id" in str(exc).lower():
+                return super().run(text, "", effort, env_override=env_override)
+            raise

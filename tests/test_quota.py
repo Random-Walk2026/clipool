@@ -167,5 +167,67 @@ class RefreshQuota(unittest.TestCase):
         self.assertIn("refresh_token", acc.quota_error)
 
 
+class AntigravityQuota(unittest.TestCase):
+    QUOTA_RESPONSE = {
+        "response": {
+            "groups": [
+                {
+                    "displayName": "Gemini Models",
+                    "buckets": [
+                        {"window": "weekly", "displayName": "Weekly Limit",
+                         "remainingFraction": 0.61, "resetTime": "2026-06-28T14:32:27Z"},
+                        {"window": "5h", "displayName": "Five Hour Limit",
+                         "remainingFraction": 1, "resetTime": "2026-06-27T11:56:13Z"},
+                    ],
+                },
+            ],
+        }
+    }
+    STATUS_RESPONSE = {"userStatus": {"email": "me@x.com", "planStatus": {"planInfo": {"planName": "Pro"}}}}
+
+    def setUp(self) -> None:
+        quota._agy_cache.update(ts=0.0, snap=None)  # 清缓存避免串测
+
+    def _patch(self):
+        def fake_post(port, path, body):
+            return self.QUOTA_RESPONSE if path == quota.ANTIGRAVITY_QUOTA_PATH else self.STATUS_RESPONSE
+        return (
+            mock.patch.object(quota, "_agy_listening_ports", return_value=[52705]),
+            mock.patch.object(quota, "_agy_post", side_effect=fake_post),
+        )
+
+    def test_parse_groups_orders_and_converts_fraction(self) -> None:
+        windows = quota._parse_agy_groups(self.QUOTA_RESPONSE["response"]["groups"])
+        # 5 小时排在本周前；remainingFraction → used_percent
+        self.assertEqual(windows[0]["label"], "Gemini Models · Five Hour Limit")
+        self.assertEqual(windows[0]["used_percent"], 0)
+        self.assertEqual(windows[1]["label"], "Gemini Models · Weekly Limit")
+        self.assertEqual(windows[1]["used_percent"], 39)  # round((1-0.61)*100)
+
+    def test_matching_email_attaches_quota(self) -> None:
+        acc = Account("antigravity", "me@x.com", home="/h", source_path="")
+        p1, p2 = self._patch()
+        with p1, p2:
+            q = quota.refresh_quota(acc)
+        self.assertEqual(q["plan_type"], "Pro")
+        self.assertEqual(len(q["windows"]), 2)
+        self.assertEqual(acc.quota_error, "")
+
+    def test_non_matching_email_errors(self) -> None:
+        acc = Account("antigravity", "other@x.com", home="/h", source_path="")
+        p1, p2 = self._patch()
+        with p1, p2:
+            with self.assertRaises(RuntimeError):
+                quota.refresh_quota(acc)
+        self.assertIn("me@x.com", acc.quota_error)
+
+    def test_agy_not_running_errors(self) -> None:
+        acc = Account("antigravity", "me@x.com", home="/h", source_path="")
+        with mock.patch.object(quota, "_agy_listening_ports", return_value=[]):
+            with self.assertRaises(RuntimeError):
+                quota.refresh_quota(acc)
+        self.assertIn("agy", acc.quota_error)
+
+
 if __name__ == "__main__":
     unittest.main()

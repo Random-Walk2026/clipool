@@ -5,7 +5,7 @@
 
 启动：
 
-    streamlit run src/proxy/ui/streamlit_app.py
+    streamlit run ui/streamlit_app.py
 
 代理地址默认 http://127.0.0.1:8317，可用环境变量 CLI_PROXY_URL 覆盖，
 或在左侧栏直接修改。若设置了 CLI_PROXY_API_KEY，也在左侧栏填入。
@@ -130,13 +130,20 @@ def render_quota(a: dict) -> None:
     plan = q.get("plan_type")
     label = f"额度（plan：{plan}）" if plan else "额度"
     st.caption(label)
-    cols = st.columns(2)
-    for col, (name, key) in zip(cols, [("5 小时", "five_hour"), ("本周", "weekly")]):
-        win = q.get(key)
+
+    # antigravity 用 windows 列表（多组 5h/周）；codex/claude 用 five_hour/weekly。
+    windows = q.get("windows")
+    if isinstance(windows, list) and windows:
+        items = [(w.get("label", ""), w) for w in windows]
+    else:
+        items = [("5 小时", q.get("five_hour")), ("本周", q.get("weekly"))]
+
+    cols = st.columns(min(len(items), 2) or 1)
+    for i, (name, win) in enumerate(items):
         if not win or win.get("used_percent") is None:
             continue
         used = win["used_percent"]
-        with col:
+        with cols[i % len(cols)]:
             st.progress(min(100, used) / 100, text=f"{name}：已用 {used}% · {fmt_reset(win.get('reset_at'))}")
 
 
@@ -162,7 +169,7 @@ def main() -> None:
             with st.spinner("正在拉取各账号额度…"):
                 ok, msg = do_refresh_quota(pre_refresh)
             (st.success if ok else st.error)(msg)
-        st.caption("额度查询较慢且有限流，目前支持 codex / claude；其余操作后页面会自动刷新。")
+        st.caption("额度查询较慢且有限流，目前支持 codex / claude / antigravity；其余操作后页面会自动刷新。")
     st.session_state["pre_refresh"] = pre_refresh
 
     st.title("🛰️ cli_proxy 账号管理台")
@@ -238,7 +245,7 @@ def main() -> None:
                     (st.toast if ok else st.error)(msg)
                     st.rerun()
                 if bc[2].button("额度", key=f"q-{backend}-{a['id']}", use_container_width=True,
-                                help="拉取该账号的 5 小时 / 周额度（codex / claude 支持）"):
+                                help="拉取该账号的额度（codex / claude / antigravity 支持）"):
                     with st.spinner("拉取额度中…"):
                         ok, msg = do_action(backend, a["id"], "refresh_quota",
                                             st.session_state.get("pre_refresh", False))

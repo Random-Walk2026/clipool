@@ -58,8 +58,8 @@ cli_proxy = "proxy.__main__:main"
 where = ["src"]
 include = ["proxy*"]
 
-[tool.setuptools.package-data]
-"proxy.ui" = ["*.html"]
+# 注意：UI 资源（dashboard.html / streamlit_app.py）放在仓库根目录的 ui/ 下，
+# 不随 wheel 分发；server 通过源码树路径或 CLI_PROXY_UI_DIR 定位。
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
