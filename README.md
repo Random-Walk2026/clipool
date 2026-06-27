@@ -2,7 +2,12 @@
 
 本地 OpenAI-compatible 代理包，把 **Claude / Codex / Grok / Antigravity / Copilot** 订阅 CLI 变成标准 HTTP API。
 
-架构思路源自 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)（Go 版），本包是纯 Python 实现，与 Go 版共用相同的认证文件格式和目录约定。
+> **这不是 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)（Go 版）的移植或复刻。** 仅在「对外暴露成 OpenAI-compatible HTTP 接口」这一形态上与它对齐（方便互换、沿用其 model string / 管理 API 习惯），底层走的是一条**完全不同的实现路线**：
+>
+> - **CLIProxyAPI（Go）**：拿到 OAuth token 后**直连上游 HTTP**（`cloudcode-pa` / `api.anthropic.com` 等）。
+> - **cli_proxy（本包）**：**驱动你本机真实的订阅 CLI 二进制**（`agy --print` / `claude -p` / `codex exec` …），用每个账号独立的 `home` / `profiles/` 目录做 **HOME 隔离的多账号轮换**——这正是 Go 版没有、也做不到的部分。
+>
+> 因此两者的**认证目录与文件格式并不通用**：本包默认 `~/.cli_proxy_api/`（下划线，账号文件带 `home`/`profiles` 指针），Go 版默认 `~/.cli-proxy-api/`（连字符，文件直接存 `access_token`）。**不要把两个目录合并或共用**——文件格式不同会互相污染账号池、token 各自刷新还会打架。
 
 ---
 
@@ -119,7 +124,7 @@ claude --model claude-sonnet-4-6
 
 ## 账号配置目录 `~/.cli_proxy_api/`
 
-这是认证文件目录，与 CLIProxyAPI（Go 版）**共用相同路径和格式**，可以互通：
+这是本包**专属**的认证文件目录（下划线命名，刻意区别于 Go 版的连字符 `~/.cli-proxy-api/`）。账号文件除 token 外还带 `home`/`profiles` 指针，供 CLI 子进程做 HOME 隔离——**与 Go 版的目录/格式不通用，别共用同一个目录**：
 
 ```
 ~/.cli_proxy_api/           # 默认目录（可通过 CLI_PROXY_AUTH_DIR 覆盖）
@@ -466,15 +471,15 @@ python -m streamlit run ui/streamlit_app.py
 
 ## 与 CLIProxyAPI（Go 版）的关系
 
-| 特性 | CLIProxyAPI（Go）| cli_proxy（Python）|
+**同形不同源**：两者都对外长成 OpenAI-compatible 代理，但解决问题的路线相反——Go 版绕开 CLI、直连上游 API；本包反而把「本机真实的订阅 CLI 二进制」当成后端来编排。所以它们各有不可替代的场景，不是谁移植谁、也不是谁的子集。
+
+| 维度 | CLIProxyAPI（Go）| cli_proxy（本包，Python）|
 |------|-----------------|-------------------|
-| 认证文件目录 | `~/.cli_proxy_api/` | `~/.cli_proxy_api/`（相同）|
-| 认证文件格式 | JSON，`type` 字段 | JSON，`type` 字段（相同）|
-| 多账号轮换 | ✅ | ✅ |
-| 冷却/重试 | ✅ | ✅ |
-| 管理 API | ✅ `/v0/management/*` | ✅（子集）|
-| WebSocket（Codex）| ✅ | 暂不支持 |
-| OAuth 自动刷新 | ✅ | 暂不支持 |
-| 直接 HTTP 调用（bypass CLI）| ✅ | Antigravity `/v1/messages` 已支持；OpenAI chat 仍可走 CLI |
+| **后端实现** | OAuth token 直连上游 HTTP | **spawn 真实 CLI 二进制**（`agy`/`claude`/`codex`…）|
+| **多账号隔离** | token 池 | **`home`/`profiles/` 做 HOME 隔离**（每账号独立 CLI 登录态）|
+| 认证目录 | `~/.cli-proxy-api/`（连字符）| `~/.cli_proxy_api/`（下划线，**格式不通用、不可共用**）|
+| 适用场景 | 已有可直连的 OAuth token、追求高吞吐 | 只有 CLI 登录态、需驱动真实 CLI（含 Go 直连走不通的渠道）|
+| OAuth 自动刷新 | ✅ | Antigravity 直连分支支持；CLI 分支交给 CLI 自身续期 |
 | 真·流式 | ✅ | 模拟（CLI 同步后包装 SSE）|
+| 管理 API / 冷却轮换 | ✅ `/v0/management/*` | ✅（沿用其 `/v0/management/*` 习惯）|
 | Docker | ✅ | `python -m proxy` |
