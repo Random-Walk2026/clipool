@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>cli_proxy · 账号状态</title>
+<title>clipool · 账号状态</title>
 <style>
   :root {
     --bg: #0f1115;
@@ -188,7 +188,7 @@
 </head>
 <body>
   <header>
-    <h1><span class="logo"></span> cli_proxy 账号状态</h1>
+    <h1><span class="logo"></span> clipool 账号状态</h1>
     <div class="toolbar">
       <span class="meta" id="updated"></span>
       <label class="auto"><input type="checkbox" id="auto" checked /> 自动刷新</label>
@@ -328,7 +328,7 @@ function render(data) {
 
   const root = document.getElementById("root");
   if (total === 0) {
-    root.innerHTML = `<div class="empty">尚未加载到任何账号。<br/>请在 <code>~/.cli_proxy_api/</code> 放置账号文件，或在 .env 配置令牌。</div>`;
+    root.innerHTML = `<div class="empty">尚未加载到任何账号。<br/>请在 <code>~/.clipool/</code> 放置账号文件，或在 .env 配置令牌。</div>`;
     return;
   }
   root.innerHTML = backends.map(b => {
@@ -353,7 +353,7 @@ async function load() {
       "更新于 " + new Date().toLocaleTimeString();
   } catch (e) {
     document.getElementById("root").innerHTML =
-      `<div class="error">加载失败：${esc(e.message)}<br/>请确认 cli_proxy 服务正在运行。</div>`;
+      `<div class="error">加载失败：${esc(e.message)}<br/>请确认 clipool 服务正在运行。</div>`;
   }
 }
 

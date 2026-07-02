@@ -1,502 +1,147 @@
-# cli_proxy
+# clipool
 
-本地 OpenAI-compatible 代理包，把 **Claude / Codex / Grok / Antigravity / Copilot** 订阅 CLI 变成标准 HTTP API。
+**English** | [中文](./README_CN.md)
 
-> **这不是 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)（Go 版）的移植或复刻。** 仅在「对外暴露成 OpenAI-compatible HTTP 接口」这一形态上与它对齐（方便互换、沿用其 model string / 管理 API 习惯），底层走的是一条**完全不同的实现路线**：
->
-> - **CLIProxyAPI（Go）**：拿到 OAuth token 后**直连上游 HTTP**（`cloudcode-pa` / `api.anthropic.com` 等）。
-> - **cli_proxy（本包）**：**驱动你本机真实的订阅 CLI 二进制**（`agy --print` / `claude -p` / `codex exec` …），用每个账号独立的 `home` / `profiles/` 目录做 **HOME 隔离的多账号轮换**——这正是 Go 版没有、也做不到的部分。
->
-> 因此两者的**认证目录与文件格式并不通用**：本包默认 `~/.cli_proxy_api/`（下划线，账号文件带 `home`/`profiles` 指针），Go 版默认 `~/.cli-proxy-api/`（连字符，文件直接存 `access_token`）。**不要把两个目录合并或共用**——文件格式不同会互相污染账号池、token 各自刷新还会打架。
+Turn your **Claude / Codex / Grok / Antigravity / Copilot** subscription CLIs into a standard **OpenAI- & Anthropic-compatible HTTP API** — with automatic multi-account rotation.
 
----
+```
+OpenAI SDK / Claude Code / LangChain / curl ...
+        │  standard /v1/chat/completions or /v1/messages
+        ▼
+┌─────────────────────────────┐
+│   clipool  (localhost:8318) │      picks an account from your pool,
+│   account pool · cooldown   │────► injects its credentials, then drives
+│   rotation · retry          │      the real CLI:  claude -p · codex exec
+└─────────────────────────────┘      agy --print · grok · copilot ...
+```
 
-## 目录
+## Why clipool
 
-- [快速上手](#快速上手)
-- [Claude Code 接入 Antigravity](#claude-code-接入-antigravity)
-- [账号配置目录 ~/.cli_proxy_api/](#账号配置目录-cli_proxy_api)
-- [每个 backend 的账号文件格式](#每个-backend-的账号文件格式)
-- [模型字符串格式](#模型字符串格式)
-- [三种调用方式](#三种调用方式)
-- [管理 API](#管理-api)
-- [账号状态面板](#账号状态面板)
-- [环境变量参考](#环境变量参考)
-- [Antigravity 特殊说明](#antigravity-特殊说明)
+- **Universal adapter** — anything that speaks the OpenAI or Anthropic API can now use your subscription CLIs: OpenAI/Anthropic SDKs, Claude Code, LangChain, IDE plugins, plain `curl`.
+- **Drives the real CLI binaries** — no reverse-engineered upstream APIs. If the official CLI works, clipool works.
+- **Multi-account pool** — put several accounts of the same service in `~/.clipool/`; requests rotate across them (priority groups + weighted round-robin). Exhausted accounts cool down with exponential backoff and rejoin automatically; revoked tokens are disabled persistently with a self-healing probe.
+- **HOME-isolated account switching** — for CLIs whose login state is a directory (Antigravity, Codex), each account gets its own profile directory injected via subprocess env (`HOME` / `CODEX_HOME`). No global state, thread-safe.
+- **No silent fallback** — if a pool has accounts but all are cooling/disabled, requests fail loudly instead of silently burning your default login's quota.
+- **Built-in dashboard** — zero-dependency account status page at `/`, plus a `/v0/management/*` API and an optional Streamlit console; quota bars (5-hour / weekly) for codex, claude and antigravity.
 
----
+> **Not a port of [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) (Go).** It aligns with its model-string and management-API conventions so the two are interchangeable at the HTTP surface, but takes the opposite implementation route: CLIProxyAPI calls upstream HTTP APIs directly with OAuth tokens; clipool orchestrates your local subscription CLI binaries with HOME-isolated multi-account rotation — something the direct-API route cannot do. Their auth directories and file formats are **not** compatible (`~/.clipool/` vs `~/.cli-proxy-api/`); never share one directory between them.
 
-## 快速上手
+## Quick start
 
 ```bash
-# 1. 安装本包（开发模式）
-python -m pip install -e /Users/lyzhk/GitHub/cli_proxy
+git clone https://github.com/Random-Walk2026/clipool.git && cd clipool
+python -m pip install -e .
 
-# 2. 配置账号（见下文）
+python -m clipool          # serves http://127.0.0.1:8318/v1  (8317 is left for CLIProxyAPI)
+```
 
-# 3. 启动服务
-python -m proxy              # 默认 127.0.0.1:8318（8317 留给 Go 版 CLIProxyAPI 常驻服务，避免撞车）
-python -m proxy --port 8319  # 指定端口（也可用 CLI_PROXY_PORT 环境变量改默认值）
+With zero configuration, each backend uses your machine's current CLI login (single-account mode). Then call it like any OpenAI endpoint:
 
-# 4. 调用
+```bash
 curl http://127.0.0.1:8318/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer any-value" \
-  -d '{"model":"claude/sonnet@high","messages":[{"role":"user","content":"你好"}]}'
+  -d '{"model":"claude/sonnet@high","messages":[{"role":"user","content":"hello"}]}'
 ```
-
----
-
-## 目录结构说明
-
-本仓库使用 Python 公共包常见的 `src` layout：
-
-```text
-cli_proxy/              # GitHub 仓库根目录
-├── src/
-│   └── proxy/          # 真正的 Python 包；import proxy 读这里
-├── docs/
-├── tests/
-└── pyproject.toml
-```
-
-Python 包名为 `proxy`，CLI 脚本入口仍叫 `cli_proxy`（两者独立，不再同名）。`src` layout 可以避免测试时误导入仓库根目录里的文件，是 Python 包常见做法。
-
-如果运行：
-
-```bash
-python -m proxy
-```
-
-出现：
-
-```text
-No module named proxy
-```
-
-说明当前 Python 环境还没有安装本包。先在当前环境执行：
-
-```bash
-python -m pip install -e /Users/lyzhk/GitHub/cli_proxy
-```
-
-再验证：
-
-```bash
-python -m proxy --help
-cli_proxy --help  # CLI 脚本入口名仍是 cli_proxy
-```
-
----
-
-## Claude Code 接入 Antigravity
-
-`proxy` 现在同时提供 Anthropic-compatible `/v1/messages`，Claude Code 可以把本地代理当成 Anthropic API 使用，实际请求会走你的 Antigravity profile 账号池。
-
-```bash
-# 1. 启动本地代理
-python -m proxy --port 8318
-
-# 2. 让 Claude Code 指向本地代理
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8318"
-export ANTHROPIC_AUTH_TOKEN="local-any-value"
-
-# 3. 正常启动 Claude Code
-claude --model claude-sonnet-4-6
-```
-
-如果想给本地代理加一层简单鉴权：
-
-```bash
-export CLI_PROXY_API_KEY="your-local-secret"
-python -m proxy --port 8318
-
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8318"
-export ANTHROPIC_AUTH_TOKEN="your-local-secret"
-claude --model claude-sonnet-4-6
-```
-
-当前实现是 MVP：Claude Code 的 Anthropic SSE 格式已支持，Antigravity 账号池会轮换；优先尝试直连 Cloud Code Assist，token 过期或直连不可用时会退回同 profile 的 `agy --print`。上游返回仍先完整收齐再包装成 SSE，不是逐 token 真流式。复杂 tool_use 的精确回传和 thinking signature 透传还可以继续增强。
-
-完整接入指南见 [docs/claude_code_guide.md](./docs/claude_code_guide.md)。
-
----
-
-## 账号配置目录 `~/.cli_proxy_api/`
-
-这是本包**专属**的认证文件目录（下划线命名，刻意区别于 Go 版的连字符 `~/.cli-proxy-api/`）。账号文件除 token 外还带 `home`/`profiles` 指针，供 CLI 子进程做 HOME 隔离——**与 Go 版的目录/格式不通用，别共用同一个目录**：
-
-```
-~/.cli_proxy_api/           # 默认目录（可通过 CLI_PROXY_AUTH_DIR 覆盖）
-├── claude_work.json         # 一个 Claude 账号
-├── claude_personal.json     # 另一个 Claude 账号（自动轮换）
-├── codex_main.json          # Codex 账号
-├── grok_account1.json       # Grok 账号
-├── antigravity_google.json  # Antigravity（Google Cloud Code Assist）账号
-└── copilot_pat.json         # GitHub Copilot 账号
-```
-
-**文件名规则**：随意命名，只要以 `.json` 结尾即可。`type` 字段决定属于哪个 backend。
-
-**多账号**：同一 backend 放多个文件 → 自动 round-robin 轮换，失败账号自动冷却并切换下一个。
-
-**占位符保护**：token 还是模板占位（`YOUR_...`、`XXXXX`）的文件不会入池——没填完的模板不会在轮换里白吃失败。
-
-**权限建议**：
-
-```bash
-chmod 600 ~/.cli_proxy_api/*.json   # 保护 token 文件
-```
-
----
-
-## 每个 backend 的账号文件格式
-
-### Claude（claude_*.json）
-
-Claude Code CLI 的 OAuth token。来源：`claude login` 后从 `~/.claude/` 目录复制，或从 `CLAUDE_CODE_OAUTH_TOKEN` 环境变量获取。
-
-```json
-{
-    "type": "claude",
-    "email": "you@example.com",
-    "access_token": "YOUR_CLAUDE_TOKEN",
-    "refresh_token": "rt-XXXXX...",
-    "expired": "2025-12-31T00:00:00Z"
-}
-```
-
-字段说明：
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `type` | ✅ | 固定为 `"claude"` |
-| `email` | 可选 | 账号标识，仅用于显示 |
-| `access_token` | ✅ | OAuth access token（`sk-ant-...`）|
-| `refresh_token` | 可选 | 刷新用（当前版本不自动刷新）|
-| `expired` | 可选 | 过期时间，仅记录用 |
-
-> **最简版本**（单账号时可直接在 `.env` 里写，无需创建文件）：
-> ```
-> CLAUDE_CODE_OAUTH_TOKEN=YOUR_CLAUDE_TOKEN
-> ```
-
----
-
-### Codex（codex_*.json）
-
-OpenAI Codex CLI 的 OAuth token。来源：`codex login` 后的登录态。
-
-```json
-{
-    "type": "codex",
-    "email": "you@example.com",
-    "access_token": "eyJhbGc..."
-}
-```
-
----
-
-### Grok（grok_*.json）
-
-xAI Grok CLI 的认证。来源：`grok login` 后的登录态。
-
-```json
-{
-    "type": "grok",
-    "email": "you@example.com",
-    "access_token": "xai-XXXXX..."
-}
-```
-
----
-
-### Antigravity（antigravity_*.json）
-
-> ⚠️ **Antigravity ≠ Gemini API**
->
-> Antigravity 是 **Google Cloud Code Assist**（前身为 Cloud Code AI），底层走 `cloudcode-pa.googleapis.com`，使用 Google OAuth2 认证。和普通 `GEMINI_API_KEY` 完全不同——它是 Google 账号的订阅额度，不是 API key 计费。
-
-推荐给每个 Antigravity 账号准备一个独立 profile home，并在账号 JSON 里填写 `home`。`proxy` 会从该 profile 下读取 `antigravity-oauth-token`；如果直连 token 不可用，会退回同 profile 的 `agy --print`。
-
-```json
-{
-    "type": "antigravity",
-    "email": "you@google.com",
-    "home": "~/.cli_proxy_api/profiles/agy_main",
-    "enabled": true
-}
-```
-
-profile 内的 token 文件路径通常是：
-
-```text
-~/.cli_proxy_api/profiles/agy_main/.gemini/antigravity-cli/antigravity-oauth-token
-```
-
-> ⚠️ `home` 必须指向一个**已登录**的 agy profile（其下存在上面那个 `antigravity-oauth-token`，且目录名是下划线的 `.cli_proxy_api`）。否则 `proxy` 在调用前会直接报「账号未登录」并跳过该账号——**不会**让 `agy` 进入交互式登录、不会弹浏览器。给新 profile 登录：`HOME=~/.cli_proxy_api/profiles/agy_x agy`（按提示完成一次 OAuth）。
-
----
-
-### Copilot（copilot_*.json）
-
-GitHub Copilot 的 Personal Access Token（PAT）或 fine-grained PAT。
-
-```json
-{
-    "type": "copilot",
-    "email": "you@github.com",
-    "token": "ghp_XXXXX..."
-}
-```
-
-> 也可直接在 `.env` 里写：
-> ```
-> COPILOT_GITHUB_TOKEN=ghp_XXXXX...
-> ```
-
----
-
-## 模型字符串格式
-
-支持多种格式，对齐 CLIProxyAPI 的 model string 规范：
-
-### 显式 provider 前缀（推荐）
-
-```
-claude                      → Claude CLI，默认模型，无思考强度
-claude/sonnet               → Claude CLI，sonnet 模型
-claude/sonnet@high          → Claude CLI，sonnet 模型，high effort
-claude@high                 → Claude CLI，默认模型，high effort
-codex/gpt-5.5               → Codex CLI，gpt-5.5 模型
-grok/grok-4                 → Grok CLI，grok-4 模型
-antigravity/gemini-3.5-flash → Antigravity CLI
-copilot/gpt-4.1@medium      → Copilot CLI，medium effort
-```
-
-### 括号 effort 格式（兼容 CLIProxyAPI 风格）
-
-```
-claude/sonnet(high)         → 等价于 claude/sonnet@high
-gpt-5.5(high)               → 自动推断为 codex/gpt-5.5@high
-grok-4(medium)              → 自动推断为 grok/grok-4@medium
-gemini-3.5-flash(high)      → 自动推断为 antigravity/gemini-3.5-flash@high
-```
-
-### 模型名自动推断 backend
-
-| 模型名前缀 | 推断为 |
-|-----------|--------|
-| `claude-*` | `claude` |
-| `gpt-*`, `o1`, `o3`, `o4*` | `codex` |
-| `grok-*` | `grok` |
-| `gemini-*` | `antigravity` |
-
-> 💡 **模型名容错**：`grok` / `copilot` 的可用模型随订阅变化（例如 grok CLI 实际只有 `grok-build`、`grok-composer-2.5-fast`）。当请求的模型名 CLI 不认（`unknown model id` / `not available`）时，`proxy` 会**自动回退到该 CLI 的默认模型**重试一次，保证工作流不因模型名不符而中断。
-
----
-
-### Antigravity 的 effort → 模型变体
-
-Antigravity CLI（`agy`）没有独立的 `--effort` 参数，思考强度通过**模型名变体**表达：
-
-| 基础模型 | effort | 最终 --model 参数 |
-|---------|--------|-----------------|
-| `gemini-3.5-flash` | `high` | `gemini-3.5-flash-high` |
-| `gemini-3.5-flash` | `low` | `gemini-3.5-flash-low` |
-| `gemini-3.1-pro` | `low` | `gemini-3.1-pro-low` |
-| `claude-sonnet-4-6` | `high` | `claude-sonnet-4-6-thinking` |
-
-直接写变体名时原样传入，不再叠加：`antigravity/gemini-3.5-flash-high` → `--model gemini-3.5-flash-high`。
-
----
-
-## 三种调用方式
-
-### 方式 A：进程内直接调用（无 HTTP 开销，适合同进程内嵌）
 
 ```python
-from proxy import run_with_pool
+from openai import OpenAI
 
-reply = run_with_pool("claude", "你好", model="sonnet", effort="high")
-print(reply)
-```
-
-`run_with_pool` 与 HTTP 服务共用同一套账号池语义（轮换 / 冷却 / 永久禁用），
-**无需启动服务**，也不需要 fastapi/requests 等重依赖。只想单跑一次、绕过账号池时
-用底层的 `proxy.runner.run_cli`。
-
-> 📌 **agent_workflow 集成**：`~/GitHub/agent_workflow` 的 `llm/transport_cli.py`
-> 检测到本包已安装（`pip install -e ~/GitHub/cli_proxy`）时自动委托
-> `run_with_pool`——其 subprocess「真联网」路线由此获得多账号轮换，并顺带支持
-> grok/copilot 的 subprocess 传输。设 `LLM_CLI_POOL=0` 可退回其自带单账号实现。
-
-### 方式 B：HTTP 客户端（先 `python -m proxy` 启动服务）
-
-```python
-from proxy import get_client
-
-client = get_client()   # 默认 http://127.0.0.1:8318/v1
+client = OpenAI(base_url="http://127.0.0.1:8318/v1", api_key="any-value")
 resp = client.chat.completions.create(
     model="claude/sonnet@high",
-    messages=[{"role": "user", "content": "你好"}],
-    stream=True,        # 支持流式
+    messages=[{"role": "user", "content": "hello"}],
 )
-for chunk in resp:
-    print(chunk.choices[0].delta.content or "", end="", flush=True)
+print(resp.choices[0].message.content)
 ```
 
-### 方式 C：LangChain 接入（先启动服务）
+## Model strings
+
+`<backend>/<model>@<effort>` — later parts optional. Backend is inferred from the model name when the prefix is omitted (`gpt-*` → codex, `claude-*` → claude, `gemini-*` → antigravity, `grok-*` → grok). CLIProxyAPI's `model(effort)` style is also accepted.
+
+```
+claude/sonnet@high            codex/gpt-5.5           grok/grok-4
+antigravity/gemini-3.5-flash  copilot/gpt-4.1@medium  gpt-5.5(high)
+```
+
+`GET /v1/models` lists what's currently available.
+
+## Use it from Claude Code
+
+clipool also serves the Anthropic Messages API (`/v1/messages`), so Claude Code can point at it and run on your Antigravity account pool:
+
+```bash
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8318"
+export ANTHROPIC_AUTH_TOKEN="local-any-value"
+claude --model claude-sonnet-4-6
+```
+
+## Account pool in 60 seconds
+
+Drop one JSON file per account into `~/.clipool/` (any filename; the `type` field selects the backend). Multiple files of the same backend rotate automatically.
+
+```jsonc
+// token-style backends: claude / grok / copilot
+{ "type": "claude", "email": "work@example.com", "access_token": "sk-ant-..." }
+
+// directory-style backends: antigravity / codex — one login profile per account
+{ "type": "antigravity", "email": "you@google.com", "home": "~/.clipool/profiles/agy_main" }
+```
+
+Directory-style accounts are logged in once via an isolated HOME:
+
+```bash
+mkdir -p ~/.clipool/profiles/agy_main
+HOME="$HOME/.clipool/profiles/agy_main" agy -p "ping"   # complete OAuth once
+```
+
+Optional per-account `priority` (primary/backup groups) and `weight` (weighted rotation within a group). Reload without restarting: `POST /v0/management/reload`.
+
+## Operations
+
+- **Dashboard** — `http://127.0.0.1:8318/`: status badges, masked tokens, cooldown countdowns, quota bars; refreshes every 5 s.
+- **Management API** — `GET /v0/management/accounts`, `POST .../accounts/action` (enable / disable / reset / refresh_quota), `POST .../quota/refresh`, `GET /health`.
+- **Auth (optional)** — set `CLIPOOL_API_KEY` to require a Bearer token / `x-api-key` on every request.
+- **Cooldown policy** — quota/429: 60 s × 2ⁿ (cap 1 h) · transient: 15 s × 2ⁿ (cap 5 min) · auth failure: disabled persistently, self-healing probe after 10 min.
+
+## In-process use (Python, no HTTP)
+
+The same pool semantics are importable directly — handy for embedding in agent pipelines:
 
 ```python
-from proxy import get_langchain_model
-
-llm = get_langchain_model("claude/sonnet")
-result = llm.invoke("你好")
-print(result.content)
+from clipool import run_with_pool
+reply = run_with_pool("claude", "hello", model="sonnet", effort="high")
 ```
 
----
+## Documentation
 
-## 管理 API
+Detailed docs are currently in Chinese (contributions translating them are welcome):
 
-服务运行时可通过以下端点管理账号池（对齐 CLIProxyAPI `/v0/management/*`）：
+| Doc | Contents |
+|-----|----------|
+| [README_CN](./README_CN.md) | Full reference: account file formats, env vars, cooldown, comparison table |
+| [docs/tutorial.md](./docs/tutorial.md) | Step-by-step tutorial: install → pool setup → client integration → FAQ |
+| [docs/architecture.md](./docs/architecture.md) | Internals: request lifecycle, pool scheduling, HOME isolation, provider layer |
+| [docs/claude_code_guide.md](./docs/claude_code_guide.md) | Claude Code integration guide |
+| [docs/accounts.md](./docs/accounts.md) | Account registration details per backend |
 
-```bash
-# 查看所有账号状态
-curl http://127.0.0.1:8318/v0/management/accounts
+## clipool vs CLIProxyAPI (Go)
 
-# 查看指定 backend 的账号
-curl http://127.0.0.1:8318/v0/management/accounts/claude
+| | CLIProxyAPI (Go) | clipool (Python) |
+|---|---|---|
+| Backend | direct upstream HTTP with OAuth tokens | **spawns the real CLI binaries** |
+| Multi-account | token pool | **HOME-isolated CLI login profiles** |
+| Streaming | native | simulated (CLI is synchronous; SSE-wrapped) |
+| Best for | high throughput, tokens available | CLI-only login states, exact CLI behavior |
 
-# 添加账号文件后重新加载（无需重启服务）
-curl -X POST http://127.0.0.1:8318/v0/management/reload
+Both expose the same OpenAI-compatible surface and `/v0/management/*` conventions — run them side by side (8317 / 8318).
 
-# 启用 / 禁用 / 重置 / 刷新额度（action ∈ enable | disable | reset | refresh_quota）
-curl -X POST http://127.0.0.1:8318/v0/management/accounts/action \
-  -H "Content-Type: application/json" \
-  -d '{"backend":"claude","id":"work@example.com","action":"disable"}'
+## Notes
 
-# 刷新所有账号的额度（5 小时 / 周；目前支持 codex / claude / antigravity）
-curl -X POST http://127.0.0.1:8318/v0/management/quota/refresh
+- Requests run the CLI synchronously in a thread pool; expect seconds-level latency per call (`AGENT_LLM_CLI_TIMEOUT`, default 600 s).
+- `stream=True` is protocol-compatible but not token-by-token yet (on the roadmap).
+- Use clipool only with accounts **you own**, and make sure your usage complies with each service's terms.
 
-# 查看可用模型列表
-curl http://127.0.0.1:8318/v1/models
+## License
 
-# 健康检查
-curl http://127.0.0.1:8318/health
-```
-
-账号状态返回示例：
-
-```json
-{
-  "accounts": {
-    "claude": [
-      {"backend": "claude", "id": "work@example.com", "status": "available", "available": true, "cooling": false, "cooling_seconds": 0, "error_count": 0, "quota": null}
-    ],
-    "codex": [
-      {"backend": "codex", "id": "hk@example.com", "status": "available", "available": true, "error_count": 0,
-       "quota": {"plan_type": "plus",
-                 "five_hour": {"used_percent": 4, "reset_at": 1782556912, "window_minutes": 300},
-                 "weekly": {"used_percent": 33, "reset_at": 1783084966, "window_minutes": 10080}},
-       "quota_error": ""}
-    ]
-  }
-}
-```
-
----
-
-## 账号状态面板
-
-两种可视化界面，按需选用：
-
-**① 内嵌 HTML 面板（零依赖，随服务自带）**
-
-服务启动后直接访问 <http://127.0.0.1:8318/>（或 `/dashboard`）。卡片式展示各 backend 的账号、状态徽章（🟢 可用 / 🟡 冷却中 / 🔴 已禁用）、脱敏令牌、优先级/权重、令牌到期倒计时、冷却剩余、失败次数、禁用原因，5 秒自动刷新。无需安装任何额外依赖。
-
-点「刷新额度」可拉取各账号的 **5 小时 / 周额度**（进度条 + 重置倒计时 + 套餐类型）。额度查询较慢且有限流，因此不随状态自动刷新，按需手动触发。
-
-目前支持 **codex**、**claude** 和 **antigravity**：
-
-| backend | 数据来源 | 说明 |
-| --- | --- | --- |
-| codex | `chatgpt.com/backend-api/wham/usage` | 每次用 `refresh_token` 刷新后查询；primary=5h、secondary=周 |
-| claude | `api.anthropic.com/api/oauth/usage`（需 `anthropic-beta` + `User-Agent`） | 先用现有 token 查，401 才刷新（刷新端点限流严，避免空刷） |
-| antigravity | 本地 `agy` 语言服务 `RetrieveUserQuotaSummary`（127.0.0.1，Connect 协议） | 反映「当前本地登录的 agy 账号」，按 email 匹配挂到对应账号；分 Gemini / Claude&GPT 两组各 5h+周 |
-
-其余 backend（grok / copilot）暂无可用 usage 入口，不显示额度。说明：
-
-- antigravity 需要本机正在运行 `agy`（它没有公开 HTTP usage 端点，额度只能从本地服务取，这也正是 `agy` TUI 里 `/usage` 的数据来源）。本地服务只有一个登录态，因此只会给 email 匹配的那个账号显示额度，其余账号提示去 `agy` 切换账号。
-- Claude 的 `User-Agent` 版本号可用 `CLI_PROXY_CLAUDE_CODE_VERSION` 覆盖。
-
-**② Streamlit 管理台（带操作按钮）**
-
-需要表格筛选 + 一键启用/禁用/重置/reload 时使用：
-
-```bash
-python -m pip install -e ".[ui]"            # 安装 streamlit
-python -m streamlit run ui/streamlit_app.py
-```
-
-默认连接 <http://127.0.0.1:8318>，可用 `CLI_PROXY_URL` 环境变量或左侧栏修改；若服务设了 `CLI_PROXY_API_KEY`，在左侧栏填入即可。操作按钮通过 `/v0/management/accounts/action` 端点生效并落盘，含每账号「额度」按钮与左侧栏「刷新额度」批量按钮，额度以进度条展示 5 小时 / 周用量。
-
----
-
-## 环境变量参考
-
-所有变量都可以写在项目根目录的 `.env` 里，优先级高于账号文件中的默认值。
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `CLI_PROXY_AUTH_DIR` | `~/.cli_proxy_api` | 认证文件目录 |
-| `CLI_PROXY_PORT` | `8318` | 服务默认端口（8317 留给 Go 版 CLIProxyAPI）|
-| `AGENT_LLM_CLI_TIMEOUT` | `600` | CLI 调用超时（秒）|
-| `CLAUDE_CLI_BIN` | `claude` | Claude CLI 可执行文件路径 |
-| `CODEX_CLI_BIN` | `codex` | Codex CLI 可执行文件路径 |
-| `GROK_CLI_BIN` | `grok` | Grok CLI 可执行文件路径 |
-| `ANTIGRAVITY_CLI_BIN` | `~/.local/bin/agy` 或 `agy` | Antigravity CLI 路径 |
-| `COPILOT_CLI_BIN` | `copilot` | Copilot CLI 可执行文件路径 |
-| `CLAUDE_CODE_OAUTH_TOKEN` | — | Claude 单账号兜底 token（无文件时用）|
-| `COPILOT_GITHUB_TOKEN` | — | Copilot 单账号兜底 token |
-| `CLI_PROXY_API_KEY` | — | 设置后 `/v1/messages` 需要匹配的 Bearer token 或 `x-api-key` |
-| `ANTIGRAVITY_PROJECT_ID` | 自动探测 | Cloud Code Assist project，自动探测失败时可手动指定 |
-| `ANTIGRAVITY_CLOUDCODE_ENDPOINT` | 多端点 fallback | 覆盖 Cloud Code Assist v1internal endpoint |
-| `ANTIGRAVITY_OAUTH_CLIENT_ID` | — | Antigravity token 过期后自动刷新所需 OAuth client id |
-| `ANTIGRAVITY_OAUTH_CLIENT_SECRET` | — | Antigravity token 过期后自动刷新所需 OAuth client secret |
-
----
-
-## 冷却机制
-
-账号失败时自动进入冷却，冷却期间跳过并切换下一个账号。冷却时长按**连续失败次数指数放大**（成功一次即归零）：
-
-| 错误类型 | 首次 | 连续失败 | 上限 |
-|---------|------|---------|------|
-| 配额耗尽 / 限速(429、quota exceeded)| 60 秒 | ×2 递增(60→120→240…) | 1 小时 |
-| 瞬时错误(超时、5xx、连接失败)| 15 秒 | ×2 递增 | 5 分钟 |
-| 认证失效(invalid_grant、401、token 撤销)| 永久禁用并落盘 | 600 秒后半开探测一次 | — |
-
-冷却结束后自动恢复参与轮换，无需手动干预。
-
-> ⚠️ **池中有账号但全部冷却/禁用时直接报错**，绝不回落到进程默认登录态——那等于
-> 静默偷用另一个账号的额度，antigravity 还可能因默认 HOME 未登录触发浏览器 OAuth。
-> 只有该 backend **一个账号文件都没有**时，才用默认登录态跑（单账号模式）。
-
----
-
-## 与 CLIProxyAPI（Go 版）的关系
-
-**同形不同源**：两者都对外长成 OpenAI-compatible 代理，但解决问题的路线相反——Go 版绕开 CLI、直连上游 API；本包反而把「本机真实的订阅 CLI 二进制」当成后端来编排。所以它们各有不可替代的场景，不是谁移植谁、也不是谁的子集。
-
-| 维度 | CLIProxyAPI（Go）| cli_proxy（本包，Python）|
-|------|-----------------|-------------------|
-| **后端实现** | OAuth token 直连上游 HTTP | **spawn 真实 CLI 二进制**（`agy`/`claude`/`codex`…）|
-| **多账号隔离** | token 池 | **`home`/`profiles/` 做 HOME 隔离**（每账号独立 CLI 登录态）|
-| 认证目录 | `~/.cli-proxy-api/`（连字符）| `~/.cli_proxy_api/`（下划线，**格式不通用、不可共用**）|
-| 适用场景 | 已有可直连的 OAuth token、追求高吞吐 | 只有 CLI 登录态、需驱动真实 CLI（含 Go 直连走不通的渠道）|
-| OAuth 自动刷新 | ✅ | Antigravity 直连分支支持；CLI 分支交给 CLI 自身续期 |
-| 真·流式 | ✅ | 模拟（CLI 同步后包装 SSE）|
-| 管理 API / 冷却轮换 | ✅ `/v0/management/*` | ✅（沿用其 `/v0/management/*` 习惯）|
-| Docker | ✅ | `python -m proxy` |
+[MIT](./LICENSE)

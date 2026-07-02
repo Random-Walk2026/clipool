@@ -1,9 +1,9 @@
 # 账号配置指南
 
-`proxy` 从 `~/.cli_proxy_api/`（可用 `CLI_PROXY_AUTH_DIR` 覆盖）读取账号注册文件。
+`clipool` 从 `~/.clipool/`（可用 `CLIPOOL_AUTH_DIR` 覆盖）读取账号注册文件。
 
 ```text
-~/.cli_proxy_api/
+~/.clipool/
 ├── antigravity_1.json
 ├── antigravity_2.json
 ├── claude_work.json
@@ -23,8 +23,8 @@
 Antigravity 使用 profile 目录隔离多账号。为每个账号建独立 profile：
 
 ```bash
-mkdir -p ~/.cli_proxy_api/profiles/agy_main
-HOME="$HOME/.cli_proxy_api/profiles/agy_main" agy -p "ping"
+mkdir -p ~/.clipool/profiles/agy_main
+HOME="$HOME/.clipool/profiles/agy_main" agy -p "ping"
 ```
 
 然后创建账号注册文件：
@@ -33,7 +33,7 @@ HOME="$HOME/.cli_proxy_api/profiles/agy_main" agy -p "ping"
 {
   "type": "antigravity",
   "email": "you@example.com",
-  "home": "~/.cli_proxy_api/profiles/agy_main",
+  "home": "~/.clipool/profiles/agy_main",
   "enabled": true
 }
 ```
@@ -41,18 +41,18 @@ HOME="$HOME/.cli_proxy_api/profiles/agy_main" agy -p "ping"
 token 文件路径：
 
 ```text
-~/.cli_proxy_api/profiles/agy_main/.gemini/antigravity-cli/antigravity-oauth-token
+~/.clipool/profiles/agy_main/.gemini/antigravity-cli/antigravity-oauth-token
 ```
 
-`proxy` 优先直接读取该 token 发起 HTTP 请求；直连失败时自动回退到 `agy --print`（同 profile）。
+`clipool` 优先直接读取该 token 发起 HTTP 请求；直连失败时自动回退到 `agy --print`（同 profile）。
 
 ---
 
 ## Codex 账号
 
 ```bash
-mkdir -p ~/.cli_proxy_api/profiles/codex_personal
-CODEX_HOME="$HOME/.cli_proxy_api/profiles/codex_personal" codex login
+mkdir -p ~/.clipool/profiles/codex_personal
+CODEX_HOME="$HOME/.clipool/profiles/codex_personal" codex login
 ```
 
 账号文件：
@@ -61,7 +61,7 @@ CODEX_HOME="$HOME/.cli_proxy_api/profiles/codex_personal" codex login
 {
   "type": "codex",
   "email": "you@example.com",
-  "home": "~/.cli_proxy_api/profiles/codex_personal",
+  "home": "~/.clipool/profiles/codex_personal",
   "enabled": true
 }
 ```
@@ -109,7 +109,7 @@ export COPILOT_GITHUB_TOKEN="..."
 
 ## Token 生命周期与自动禁用
 
-`proxy` 区分**临时故障**和**永久认证失效**：
+`clipool` 区分**临时故障**和**永久认证失效**：
 
 | 错误类型 | 处理方式 |
 |---|---|
@@ -139,7 +139,7 @@ export COPILOT_GITHUB_TOKEN="..."
 
 ## 直连 HTTP Token 刷新（Antigravity）
 
-对于 Antigravity 直连 HTTP 路径，`proxy` 会在 token 过期前 **300 秒**主动刷新，刷新后把新的过期时间写回账号 JSON 的 `expiry` 字段。
+对于 Antigravity 直连 HTTP 路径，`clipool` 会在 token 过期前 **300 秒**主动刷新，刷新后把新的过期时间写回账号 JSON 的 `expiry` 字段。
 
 自动刷新需要设置 OAuth client 环境变量：
 
@@ -156,7 +156,7 @@ export ANTIGRAVITY_OAUTH_CLIENT_SECRET="..."
 {
   "type": "antigravity",
   "email": "you@example.com",
-  "home": "~/.cli_proxy_api/profiles/agy_main",
+  "home": "~/.clipool/profiles/agy_main",
   "enabled": true,
   "expiry": "2026-06-27T10:00:00Z",
   "priority": 0,

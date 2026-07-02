@@ -1,4 +1,4 @@
-"""cli_proxy 配置：二进制路径和超时，全部可由 .env 覆盖。"""
+"""clipool 配置：二进制路径和超时，全部可由 .env 覆盖。"""
 from __future__ import annotations
 
 import os
@@ -46,7 +46,7 @@ def load_project_env(path: Path | None = None) -> None:
 load_project_env()
 
 # 8317 留给原作者的 Go 版 CLIProxyAPI（本机 brew 常驻服务）；本包默认 8318 避免撞车。
-DEFAULT_PORT = int(os.environ.get("CLI_PROXY_PORT", "8318"))
+DEFAULT_PORT = int(os.environ.get("CLIPOOL_PORT", "8318"))
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
 

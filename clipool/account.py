@@ -1,6 +1,6 @@
 """账号模型与认证文件管理。
 
-认证文件存放在 AUTH_DIR（默认 ~/.cli_proxy_api/）下，格式与 CLIProxyAPI 兼容：
+认证文件存放在 AUTH_DIR（默认 ~/.clipool/）下，格式与 CLIProxyAPI 兼容：
 
     claude_work.json        → Claude 账号，文件名随意（backend 字段决定类型）
     codex_personal.json     → Codex 账号
@@ -18,7 +18,7 @@
 
 也可直接在 .env 里配置单账号（无需文件）：
 
-    CLAUDE_CODE_OAUTH_TOKEN=sk-ant-xxx...   # cli_proxy 会自动读取
+    CLAUDE_CODE_OAUTH_TOKEN=sk-ant-xxx...   # clipool 会自动读取
     COPILOT_GITHUB_TOKEN=ghp_xxx...
 """
 from __future__ import annotations
@@ -42,8 +42,8 @@ load_project_env()
 
 
 def _auth_dir_from_env() -> Path:
-    configured = os.environ.get("CLI_PROXY_AUTH_DIR", "").strip()
-    return Path(configured).expanduser() if configured else Path.home() / ".cli_proxy_api"
+    configured = os.environ.get("CLIPOOL_AUTH_DIR", "").strip()
+    return Path(configured).expanduser() if configured else Path.home() / ".clipool"
 
 
 AUTH_DIR = _auth_dir_from_env()

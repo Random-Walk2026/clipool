@@ -20,7 +20,7 @@ env/
 .env
 .env.*
 !.env.example
-.cli_proxy_api/
+.clipool/
 profiles/
 *oauth-token*
 auth.json

@@ -59,7 +59,7 @@ CLAUDE_TOKEN_ENDPOINT = "https://platform.claude.com/v1/oauth/token"
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 CLAUDE_OAUTH_BETA = "oauth-2025-04-20"
 # usage / 刷新端点都在 Cloudflare 后面，缺 User-Agent 会被 1010 拒绝；可用 env 覆盖版本号。
-CLAUDE_USER_AGENT = f"claude-code/{os.environ.get('CLI_PROXY_CLAUDE_CODE_VERSION', '2.1.0')}"
+CLAUDE_USER_AGENT = f"claude-code/{os.environ.get('CLIPOOL_CLAUDE_CODE_VERSION', '2.1.0')}"
 
 # ── Antigravity（本地 agy 语言服务）─────────────────────────────────────────
 # agy CLI 在本地起一个 language server（Connect 协议，自签名 HTTPS）。和 codex/claude 不同，

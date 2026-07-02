@@ -1,6 +1,6 @@
 # FastAPI 实现要点
 
-本文梳理 `proxy` 服务端（`src/proxy/server.py`）用到的 FastAPI 核心技术点，方便后续扩展或独立成新服务时参考。
+本文梳理 `clipool` 服务端（`clipool/server.py`）用到的 FastAPI 核心技术点，方便后续扩展或独立成新服务时参考。
 
 ## 1. 路由函数只做协议适配
 
@@ -24,7 +24,7 @@ async def anthropic_messages(req: AnthropicMessagesRequest, request: Request):
 
 ## 2. Pydantic model 接住外部协议
 
-`AnthropicMessagesRequest` 定义在 `src/proxy/anthropic.py`：
+`AnthropicMessagesRequest` 定义在 `clipool/anthropic.py`：
 
 ```python
 class AnthropicMessagesRequest(BaseModel):
@@ -56,7 +56,7 @@ event: message_stop
 `agy --print` 和 Cloud Code Assist HTTP 请求都是同步阻塞调用。在 async 路由里直接跑会卡住整个事件循环，所以用：
 
 ```python
-_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="proxy")
+_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="clipool")
 
 content = await loop.run_in_executor(
     _executor,
@@ -80,16 +80,16 @@ response = client.post("/v1/messages", json={...})
 
 ```python
 def _authorize_optional(request: Request) -> None:
-    expected = os.environ.get("CLI_PROXY_API_KEY", "").strip()
+    expected = os.environ.get("CLIPOOL_API_KEY", "").strip()
     if not expected:
         return   # 没配置就跳过
     token = request.headers.get("authorization", "")[7:]  # Bearer xxx
     token = token or request.headers.get("x-api-key", "")
     if token != expected:
-        raise HTTPException(status_code=401, detail="Invalid CLI_PROXY_API_KEY")
+        raise HTTPException(status_code=401, detail="Invalid CLIPOOL_API_KEY")
 ```
 
-`CLI_PROXY_API_KEY` 未设置时完全不鉴权，设置后 Bearer token 和 `x-api-key` 两种方式都兼容。
+`CLIPOOL_API_KEY` 未设置时完全不鉴权，设置后 Bearer token 和 `x-api-key` 两种方式都兼容。
 
 ## 7. 管理 API 设计
 
@@ -104,12 +104,12 @@ POST /v0/management/reload             # 热重载账号文件，无需重启服
 ## 关键文件索引
 
 ```text
-src/proxy/server.py           FastAPI 路由与线程池
-src/proxy/anthropic.py        Anthropic 请求/响应 schema 和 SSE 生成
-src/proxy/pool.py             账号池：主备号路由、冷却、永久禁用
-src/proxy/account.py          账号模型：expiry、priority/weight、persist()
-src/proxy/router.py           模型字符串解析（provider/model@effort）
-src/proxy/providers/
+clipool/server.py           FastAPI 路由与线程池
+clipool/anthropic.py        Anthropic 请求/响应 schema 和 SSE 生成
+clipool/pool.py             账号池：主备号路由、冷却、永久禁用
+clipool/account.py          账号模型：expiry、priority/weight、persist()
+clipool/router.py           模型字符串解析（provider/model@effort）
+clipool/providers/
   antigravity_http.py         直连 Cloud Code Assist，含 token 刷新
   antigravity.py              agy --print CLI 调用（直连失败的回退）
   claude.py / codex.py / …   其他 CLI 后端

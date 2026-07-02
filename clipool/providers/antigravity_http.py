@@ -1,6 +1,6 @@
 """Direct Antigravity / Google Cloud Code Assist HTTP backend.
 
-This module is intentionally independent from ``agy --print`` so cli_proxy can
+This module is intentionally independent from ``agy --print`` so clipool can
 serve tools such as Claude Code through an Anthropic-compatible local API.
 """
 from __future__ import annotations
@@ -158,11 +158,11 @@ def _headers(token: AntigravityProfileToken) -> dict[str, str]:
     return {
         "authorization": f"{token.token_type} {token.access_token}",
         "content-type": "application/json",
-        "user-agent": "cli_proxy/2.0",
-        "x-client-name": "cli_proxy",
+        "user-agent": "clipool/2.0",
+        "x-client-name": "clipool",
         "x-client-version": "2.0",
-        "x-machine-id": os.environ.get("CLI_PROXY_MACHINE_ID", uuid.uuid4().hex),
-        "x-vscode-sessionid": os.environ.get("CLI_PROXY_SESSION_ID", uuid.uuid4().hex),
+        "x-machine-id": os.environ.get("CLIPOOL_MACHINE_ID", uuid.uuid4().hex),
+        "x-vscode-sessionid": os.environ.get("CLIPOOL_SESSION_ID", uuid.uuid4().hex),
     }
 
 

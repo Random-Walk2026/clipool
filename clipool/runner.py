@@ -1,6 +1,6 @@
 """向后兼容层：run_cli() 和 antigravity_model_variant() 的原始入口。
 
-内部实现已迁移到 cli_proxy/providers/；这个文件保留是因为：
+内部实现已迁移到 clipool/providers/；这个文件保留是因为：
   - llm_backends.py 从这里导入 run_cli
   - lesson_sdk/ 里的示例可能直接导入
 """

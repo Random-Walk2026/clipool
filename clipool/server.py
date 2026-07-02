@@ -37,16 +37,16 @@ from .providers.antigravity_http import AntigravityHTTPProvider
 from .quota import QUOTA_SUPPORTED, refresh_quota, supports_quota
 from .router import parse_model
 
-app = FastAPI(title="cli_proxy API", version="2.0.0")
+app = FastAPI(title="clipool API", version="2.0.0")
 
 # 账号状态仪表盘 / Streamlit 管理台放在仓库根目录的 ui/ 下（不随包分发）。
-# 默认从源码树定位（src/proxy/server.py → 上两级是仓库根），可用 CLI_PROXY_UI_DIR 覆盖。
+# 默认从源码树定位（clipool/server.py → 上一级是仓库根，ui/ 就在其下），可用 CLIPOOL_UI_DIR 覆盖。
 _UI_DIR = Path(
-    os.environ.get("CLI_PROXY_UI_DIR") or (Path(__file__).resolve().parents[2] / "ui")
+    os.environ.get("CLIPOOL_UI_DIR") or (Path(__file__).resolve().parents[1] / "ui")
 )
 
 # CLI subprocess 在专用线程池里跑
-_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cli_proxy")
+_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="clipool")
 
 _antigravity_http_provider = AntigravityHTTPProvider()
 
@@ -131,7 +131,7 @@ async def _stream_response(
 # ── CLI 执行（含账号轮换 + 重试；同步逻辑统一在 executor.py）─────────────────
 
 async def _run_with_pool(provider_name: str, text: str, model: str, effort: str) -> str:
-    """在线程池里跑 CLI，多账号轮换由 proxy.executor 统一处理。"""
+    """在线程池里跑 CLI，多账号轮换由 clipool.executor 统一处理。"""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         _executor, lambda: run_with_pool(provider_name, text, model, effort)
@@ -139,9 +139,9 @@ async def _run_with_pool(provider_name: str, text: str, model: str, effort: str)
 
 
 def _authorize_optional(request: Request) -> None:
-    """Require a local API key only when CLI_PROXY_API_KEY is configured."""
+    """Require a local API key only when CLIPOOL_API_KEY is configured."""
 
-    expected = os.environ.get("CLI_PROXY_API_KEY", "").strip()
+    expected = os.environ.get("CLIPOOL_API_KEY", "").strip()
     if not expected:
         return
     auth = request.headers.get("authorization", "")
@@ -150,7 +150,7 @@ def _authorize_optional(request: Request) -> None:
         token = auth[7:].strip()
     token = token or request.headers.get("x-api-key", "").strip()
     if token != expected:
-        raise HTTPException(status_code=401, detail="Invalid CLI_PROXY_API_KEY")
+        raise HTTPException(status_code=401, detail="Invalid CLIPOOL_API_KEY")
 
 
 async def _run_anthropic_with_pool(req: AnthropicMessagesRequest) -> str:
@@ -204,7 +204,7 @@ async def list_models():
             "id": backend,
             "object": "model",
             "created": 0,
-            "owned_by": "cli_proxy",
+            "owned_by": "clipool",
             "accounts": len(accounts),
         })
     return {"object": "list", "data": data}

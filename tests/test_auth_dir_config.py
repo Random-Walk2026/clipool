@@ -17,11 +17,11 @@ def _run_auth_dir(cwd: Path, home: Path, *, env_auth_dir: str | None = None) -> 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT / "src")
     env["HOME"] = str(home)
-    env.pop("CLI_PROXY_AUTH_DIR", None)
+    env.pop("CLIPOOL_AUTH_DIR", None)
     if env_auth_dir is not None:
-        env["CLI_PROXY_AUTH_DIR"] = env_auth_dir
+        env["CLIPOOL_AUTH_DIR"] = env_auth_dir
 
-    code = "from proxy.account import AUTH_DIR; print(AUTH_DIR)"
+    code = "from clipool.account import AUTH_DIR; print(AUTH_DIR)"
     res = subprocess.run(
         [sys.executable, "-c", code],
         cwd=str(cwd),
@@ -39,8 +39,8 @@ class AuthDirConfig(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
             home.mkdir()
-            got = _run_auth_dir(Path(tmp), home, env_auth_dir="~/.cli_proxy_api")
-            self.assertEqual(got, str(home / ".cli_proxy_api"))
+            got = _run_auth_dir(Path(tmp), home, env_auth_dir="~/.clipool")
+            self.assertEqual(got, str(home / ".clipool"))
 
     def test_dotenv_auth_dir_is_loaded_before_account_module(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -51,7 +51,7 @@ class AuthDirConfig(unittest.TestCase):
                 textwrap.dedent(
                     """
                     # local auth directory
-                    CLI_PROXY_AUTH_DIR=~/.cli_proxy_api
+                    CLIPOOL_AUTH_DIR=~/.clipool
                     """
                 ).strip()
                 + "\n",
@@ -59,7 +59,7 @@ class AuthDirConfig(unittest.TestCase):
             )
 
             got = _run_auth_dir(root, home)
-            self.assertEqual(got, str(home / ".cli_proxy_api"))
+            self.assertEqual(got, str(home / ".clipool"))
 
     def test_environment_auth_dir_wins_over_dotenv(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -67,7 +67,7 @@ class AuthDirConfig(unittest.TestCase):
             home = root / "home"
             home.mkdir()
             (root / ".env").write_text(
-                "CLI_PROXY_AUTH_DIR=~/.from-dotenv\n", encoding="utf-8"
+                "CLIPOOL_AUTH_DIR=~/.from-dotenv\n", encoding="utf-8"
             )
 
             got = _run_auth_dir(root, home, env_auth_dir="~/.from-env")

@@ -1,14 +1,14 @@
-"""cli_proxy 账号管理台（Streamlit 版）。
+"""clipool 账号管理台（Streamlit 版）。
 
 比内嵌 HTML 面板更"可操作"：表格 + 筛选 + 启用/禁用/重置/reload 按钮。
-作为独立进程运行，通过管理 API 与正在运行的 cli_proxy 服务通信。
+作为独立进程运行，通过管理 API 与正在运行的 clipool 服务通信。
 
 启动：
 
     streamlit run ui/streamlit_app.py
 
-代理地址默认 http://127.0.0.1:8318，可用环境变量 CLI_PROXY_URL 覆盖，
-或在左侧栏直接修改。若设置了 CLI_PROXY_API_KEY，也在左侧栏填入。
+代理地址默认 http://127.0.0.1:8318，可用环境变量 CLIPOOL_URL 覆盖，
+或在左侧栏直接修改。若设置了 CLIPOOL_API_KEY，也在左侧栏填入。
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 import requests
 import streamlit as st
 
-DEFAULT_URL = os.environ.get("CLI_PROXY_URL", "http://127.0.0.1:8318")
+DEFAULT_URL = os.environ.get("CLIPOOL_URL", "http://127.0.0.1:8318")
 STATUS_LABEL = {"available": "🟢 可用", "cooling": "🟡 冷却中", "disabled": "🔴 已禁用"}
 
 
@@ -148,9 +148,9 @@ def render_quota(a: dict) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="cli_proxy 账号管理台", page_icon="🛰️", layout="wide")
+    st.set_page_config(page_title="clipool 账号管理台", page_icon="🛰️", layout="wide")
     st.session_state.setdefault("base_url", DEFAULT_URL)
-    st.session_state.setdefault("api_key", os.environ.get("CLI_PROXY_API_KEY", ""))
+    st.session_state.setdefault("api_key", os.environ.get("CLIPOOL_API_KEY", ""))
 
     with st.sidebar:
         st.header("⚙️ 连接")
@@ -172,18 +172,18 @@ def main() -> None:
         st.caption("额度查询较慢且有限流，目前支持 codex / claude / antigravity；其余操作后页面会自动刷新。")
     st.session_state["pre_refresh"] = pre_refresh
 
-    st.title("🛰️ cli_proxy 账号管理台")
+    st.title("🛰️ clipool 账号管理台")
 
     try:
         accounts = fetch_accounts()
     except requests.RequestException as exc:
-        st.error(f"无法连接到 cli_proxy（{_base()}）：{exc}")
-        st.info("请确认服务已启动：`python -m proxy --port 8318`")
+        st.error(f"无法连接到 clipool（{_base()}）：{exc}")
+        st.info("请确认服务已启动：`python -m clipool --port 8318`")
         return
 
     all_accts = [a for accs in accounts.values() for a in accs]
     if not all_accts:
-        st.warning("尚未加载到任何账号。请在 ~/.cli_proxy_api/ 放置账号文件，或在 .env 配置令牌。")
+        st.warning("尚未加载到任何账号。请在 ~/.clipool/ 放置账号文件，或在 .env 配置令牌。")
         return
 
     # ── 汇总 ──────────────────────────────────────────────────────────────

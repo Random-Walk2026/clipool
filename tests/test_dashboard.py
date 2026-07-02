@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fastapi.testclient import TestClient
 
-from proxy.account import Account
-from proxy.server import app
+from clipool.account import Account
+from clipool.server import app
 
 
 class DashboardRoute(unittest.TestCase):
@@ -22,14 +22,14 @@ class DashboardRoute(unittest.TestCase):
             res = self.client.get(path)
             self.assertEqual(res.status_code, 200)
             self.assertIn("text/html", res.headers["content-type"])
-            self.assertIn("cli_proxy", res.text)
+            self.assertIn("clipool", res.text)
             # 页面靠这个接口取数据
             self.assertIn("/v0/management/accounts", res.text)
 
 
 class ManagementActions(unittest.TestCase):
     def setUp(self) -> None:
-        from proxy import pool as poolmod
+        from clipool import pool as poolmod
 
         # 用内存账号替换全局池，避免依赖磁盘上的账号文件
         acc = Account("claude", "alice@x.com", token="t", source_path="")
@@ -42,7 +42,7 @@ class ManagementActions(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self) -> None:
-        from proxy import pool as poolmod
+        from clipool import pool as poolmod
 
         poolmod._pool = None
 

@@ -1,21 +1,21 @@
 # Claude Code 接入 Antigravity 使用指南
 
-本文说明如何把 `proxy` 当成本地代理，让 Claude Code 通过 Anthropic 兼容接口使用你的 Antigravity 账号池。
+本文说明如何把 `clipool` 当成本地代理，让 Claude Code 通过 Anthropic 兼容接口使用你的 Antigravity 账号池。
 
 ## 目标
 
-你有多个 Antigravity 账号，额度分散在不同 Google 账号里。`proxy` 做三件事：
+你有多个 Antigravity 账号，额度分散在不同 Google 账号里。`clipool` 做三件事：
 
 1. 暴露本地 HTTP 服务：`http://127.0.0.1:8318/v1/messages`
 2. 兼容 Claude Code 的 Anthropic API 请求格式
-3. 从 `~/.cli_proxy_api/` 读取多个 Antigravity profile，按账号池轮换使用
+3. 从 `~/.clipool/` 读取多个 Antigravity profile，按账号池轮换使用
 
 调用链：
 
 ```text
 Claude Code
   -> ANTHROPIC_BASE_URL=http://127.0.0.1:8318
-  -> proxy /v1/messages
+  -> clipool /v1/messages
   -> AccountPool 选择一个 antigravity profile（含主备号路由）
   -> 读取 profile 内的 antigravity-oauth-token（按需自动刷新）
   -> Google Cloud Code Assist v1internal API
@@ -23,10 +23,10 @@ Claude Code
 
 ## 准备账号目录
 
-`proxy` 默认读取 `~/.cli_proxy_api/`，每个 Antigravity 账号放一个 JSON：
+`clipool` 默认读取 `~/.clipool/`，每个 Antigravity 账号放一个 JSON：
 
 ```text
-~/.cli_proxy_api/
+~/.clipool/
 ├── antigravity_1.json
 ├── antigravity_2.json
 └── profiles/
@@ -37,8 +37,8 @@ Claude Code
 先为每个账号建独立 profile 目录并登录：
 
 ```bash
-mkdir -p ~/.cli_proxy_api/profiles/agy_main
-HOME="$HOME/.cli_proxy_api/profiles/agy_main" agy -p "ping"
+mkdir -p ~/.clipool/profiles/agy_main
+HOME="$HOME/.clipool/profiles/agy_main" agy -p "ping"
 ```
 
 再创建对应的账号 JSON：
@@ -47,7 +47,7 @@ HOME="$HOME/.cli_proxy_api/profiles/agy_main" agy -p "ping"
 {
   "type": "antigravity",
   "email": "account@example.com",
-  "home": "~/.cli_proxy_api/profiles/agy_main",
+  "home": "~/.clipool/profiles/agy_main",
   "enabled": true
 }
 ```
@@ -55,17 +55,17 @@ HOME="$HOME/.cli_proxy_api/profiles/agy_main" agy -p "ping"
 token 文件实际位于：
 
 ```text
-~/.cli_proxy_api/profiles/agy_main/.gemini/antigravity-cli/antigravity-oauth-token
+~/.clipool/profiles/agy_main/.gemini/antigravity-cli/antigravity-oauth-token
 ```
 
-`proxy` 会读取其中的 `access_token`、`refresh_token` 和过期时间。token 过期前 5 分钟会自动刷新，刷新后把新的过期时间写回账号 JSON。如果没有配置刷新所需的 OAuth client 环境变量，会提示你重新用 `agy` 登录对应 profile。
+`clipool` 会读取其中的 `access_token`、`refresh_token` 和过期时间。token 过期前 5 分钟会自动刷新，刷新后把新的过期时间写回账号 JSON。如果没有配置刷新所需的 OAuth client 环境变量，会提示你重新用 `agy` 登录对应 profile。
 
 详细账号配置（主备号、priority / weight 字段、禁用恢复等）见 [accounts.md](accounts.md)。
 
 ## 启动本地代理
 
 ```bash
-python -m proxy --port 8318
+python -m clipool --port 8318
 ```
 
 验证：
@@ -95,16 +95,16 @@ claude --model claude-sonnet-4-6
 
 ```bash
 # 启动代理时：
-export CLI_PROXY_API_KEY="your-local-secret"
-python -m proxy --port 8318
+export CLIPOOL_API_KEY="your-local-secret"
+python -m clipool --port 8318
 
 # 另一个终端：
 export ANTHROPIC_BASE_URL="http://127.0.0.1:8318"
-export ANTHROPIC_AUTH_TOKEN="your-local-secret"   # 与 CLI_PROXY_API_KEY 一致
+export ANTHROPIC_AUTH_TOKEN="your-local-secret"   # 与 CLIPOOL_API_KEY 一致
 claude --model claude-sonnet-4-6
 ```
 
-`CLI_PROXY_API_KEY` 只在本地代理层校验，与 Google / Anthropic 无关。
+`CLIPOOL_API_KEY` 只在本地代理层校验，与 Google / Anthropic 无关。
 
 ## 手动测试
 
@@ -125,29 +125,29 @@ curl http://127.0.0.1:8318/v1/messages \
 ## 常见问题
 
 **Claude Code 报 401**
-确认 `ANTHROPIC_AUTH_TOKEN` 与 `CLI_PROXY_API_KEY` 值一致：
+确认 `ANTHROPIC_AUTH_TOKEN` 与 `CLIPOOL_API_KEY` 值一致：
 
 ```bash
-echo "$CLI_PROXY_API_KEY"
+echo "$CLIPOOL_API_KEY"
 echo "$ANTHROPIC_AUTH_TOKEN"
 ```
 
 **找不到 token 文件**
 
 ```bash
-cat ~/.cli_proxy_api/antigravity_1.json
-find ~/.cli_proxy_api/profiles/agy_main -name antigravity-oauth-token
+cat ~/.clipool/antigravity_1.json
+find ~/.clipool/profiles/agy_main -name antigravity-oauth-token
 ```
 
 **token 过期**
 
 ```bash
-HOME="$HOME/.cli_proxy_api/profiles/agy_main" agy -p "ping"
+HOME="$HOME/.clipool/profiles/agy_main" agy -p "ping"
 ```
 
 **账号额度打满**
 
-`proxy` 会把失败账号冷却一段时间，自动尝试下一个账号：
+`clipool` 会把失败账号冷却一段时间，自动尝试下一个账号：
 
 ```bash
 curl http://127.0.0.1:8318/v0/management/accounts/antigravity

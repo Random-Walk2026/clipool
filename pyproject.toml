@@ -3,14 +3,14 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cli_proxy"
+name = "clipool"
 version = "0.1.0"
 description = "Local OpenAI/Anthropic-compatible proxy for subscription CLIs."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [
-  { name = "cli_proxy contributors" }
+  { name = "clipool contributors" }
 ]
 keywords = ["fastapi", "claude-code", "openai-compatible", "anthropic", "cli"]
 classifiers = [
@@ -47,19 +47,19 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Random-Walk2026/cli_proxy"
-Repository = "https://github.com/Random-Walk2026/cli_proxy"
-Issues = "https://github.com/Random-Walk2026/cli_proxy/issues"
+Homepage = "https://github.com/Random-Walk2026/clipool"
+Repository = "https://github.com/Random-Walk2026/clipool"
+Issues = "https://github.com/Random-Walk2026/clipool/issues"
 
 [project.scripts]
-cli_proxy = "proxy.__main__:main"
+clipool = "clipool.__main__:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
-include = ["proxy*"]
+where = ["."]
+include = ["clipool*"]
 
 # 注意：UI 资源（dashboard.html / streamlit_app.py）放在仓库根目录的 ui/ 下，
-# 不随 wheel 分发；server 通过源码树路径或 CLI_PROXY_UI_DIR 定位。
+# 不随 wheel 分发；server 通过源码树路径或 CLIPOOL_UI_DIR 定位。
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

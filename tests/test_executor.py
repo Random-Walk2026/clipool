@@ -18,9 +18,9 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from proxy import executor as executor_mod
-from proxy import pool as poolmod
-from proxy.account import Account
+from clipool import executor as executor_mod
+from clipool import pool as poolmod
+from clipool.account import Account
 
 
 class _FakeProvider:
@@ -162,7 +162,7 @@ class ServerOpenAICompat(unittest.TestCase):
 
     def _client(self):
         from fastapi.testclient import TestClient
-        from proxy import server as servermod
+        from clipool import server as servermod
 
         return TestClient(servermod.app), servermod
 
@@ -224,7 +224,7 @@ class ServerOpenAICompat(unittest.TestCase):
 
     def test_api_key_enforced_when_configured(self) -> None:
         client, _ = self._client()
-        os.environ["CLI_PROXY_API_KEY"] = "secret-key"
+        os.environ["CLIPOOL_API_KEY"] = "secret-key"
         try:
             resp = client.post(
                 "/v1/chat/completions",
@@ -244,13 +244,13 @@ class ServerOpenAICompat(unittest.TestCase):
             )
             self.assertEqual(resp.status_code, 400)  # 过了鉴权，栽在未知 provider
         finally:
-            os.environ.pop("CLI_PROXY_API_KEY", None)
+            os.environ.pop("CLIPOOL_API_KEY", None)
 
 
 class AntigravityThinkingEffort(unittest.TestCase):
     def test_model_passes_through_unless_thinking_enabled(self) -> None:
-        from proxy.anthropic import AnthropicMessagesRequest
-        from proxy.providers.antigravity_http import _thinking_effort
+        from clipool.anthropic import AnthropicMessagesRequest
+        from clipool.providers.antigravity_http import _thinking_effort
 
         plain = AnthropicMessagesRequest(
             model="claude-sonnet-4-6", messages=[{"role": "user", "content": "hi"}]

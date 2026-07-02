@@ -4,7 +4,7 @@ server.py 的 async 端点把这里的函数丢进线程池跑；外部项目（
 llm.transport_cli）也可以直接进程内调用，免起 HTTP 服务就拿到同一套
 多账号轮换 / 冷却 / 永久禁用语义::
 
-    from proxy.executor import run_with_pool
+    from clipool.executor import run_with_pool
     reply = run_with_pool("antigravity", "你好", model="gemini-3.5-flash", effort="low")
 
 调度规则（对齐 CLIProxyAPI，并修正旧版的回落漏洞）：
@@ -59,7 +59,7 @@ def execute_with_pool(backend: str, fn: Callable[[Optional[Account]], str]) -> s
         except RuntimeError as exc:
             last_exc = exc
             pool.mark_failed(account, exc)
-            print(f"  [cli_proxy] {backend}/{account.id} 失败：{exc}；切换下一个账号…")
+            print(f"  [clipool] {backend}/{account.id} 失败：{exc}；切换下一个账号…")
             continue
         pool.mark_success(account)
         return result

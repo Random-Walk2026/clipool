@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from proxy.router import is_cli_model, parse_model
+from clipool.router import is_cli_model, parse_model
 
 
 class RouterTests(unittest.TestCase):

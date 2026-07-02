@@ -16,8 +16,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from proxy import pool as poolmod
-from proxy.account import Account, _account_from_file, _parse_expiry_ts
+from clipool import pool as poolmod
+from clipool.account import Account, _account_from_file, _parse_expiry_ts
 
 
 def _write_account(dir_path: Path, **overrides) -> Path:
@@ -72,7 +72,7 @@ class AuthFailureDisablesPermanently(unittest.TestCase):
 class LoadIncludesDisabled(unittest.TestCase):
     def test_disabled_account_still_loaded(self) -> None:
         """禁用账号也要入池：否则半开探测无法在重启后复活，状态面板也看不到它。"""
-        from proxy import account as accountmod
+        from clipool import account as accountmod
 
         with tempfile.TemporaryDirectory() as tmp:
             _write_account(
