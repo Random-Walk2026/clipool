@@ -127,16 +127,19 @@ def refresh_antigravity_profile_token(token: AntigravityProfileToken) -> Antigra
             "ANTIGRAVITY_OAUTH_CLIENT_SECRET, or refresh the profile with agy login."
         )
 
-    response = requests.post(
-        "https://oauth2.googleapis.com/token",
-        data={
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "refresh_token": token.refresh_token,
-            "grant_type": "refresh_token",
-        },
-        timeout=30,
-    )
+    try:
+        response = requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": token.refresh_token,
+                "grant_type": "refresh_token",
+            },
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Antigravity token refresh connection failed: {exc}") from exc
     if response.status_code >= 400:
         raise RuntimeError(f"Antigravity token refresh failed: {response.status_code} {response.text[:300]}")
     return _write_refreshed_token(token, response.json())
@@ -178,12 +181,16 @@ def _fetch_project_id(token: AntigravityProfileToken) -> str:
     body = {"metadata": {"ideType": "ANTIGRAVITY"}}
     last_error = ""
     for endpoint in _endpoints():
-        response = requests.post(
-            f"{endpoint}:loadCodeAssist",
-            headers=_headers(token),
-            json=body,
-            timeout=30,
-        )
+        try:
+            response = requests.post(
+                f"{endpoint}:loadCodeAssist",
+                headers=_headers(token),
+                json=body,
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            last_error = f"connection error: {exc}"
+            continue
         if response.status_code < 400:
             data = response.json()
             project = str(data.get("cloudaicompanionProject", "")).strip()
@@ -191,6 +198,14 @@ def _fetch_project_id(token: AntigravityProfileToken) -> str:
                 return project
         last_error = f"{response.status_code} {response.text[:300]}"
     raise RuntimeError(f"Unable to resolve Antigravity Cloud Code project: {last_error}")
+
+
+def _thinking_effort(req: AnthropicMessagesRequest) -> str:
+    """Anthropic 请求显式开 thinking 时返回 "thinking"，否则空串（模型名原样透传）。"""
+    thinking = req.thinking
+    if isinstance(thinking, dict) and str(thinking.get("type", "")).lower() == "enabled":
+        return "thinking"
+    return ""
 
 
 def build_generate_body(
@@ -256,17 +271,24 @@ class AntigravityHTTPProvider:
                 account.expiry = new_expiry
                 account.persist()
         project_id = str(account.extra_env.get("ANTIGRAVITY_PROJECT_ID", "")).strip() or _fetch_project_id(token)
-        model = resolve_variant(req.model.removeprefix("antigravity/"), "high")
+        # 直连 Cloud Code 时只在请求显式开 thinking 才折变体——上游对
+        # claude-sonnet-4-6 这类 ID 没有独立 thinking 变体，硬编码 effort 会把
+        # 合法模型名折成不存在的 ID，导致直连必败、每次退化到慢的 agy 子进程。
+        model = resolve_variant(req.model.removeprefix("antigravity/"), _thinking_effort(req))
         body = build_generate_body(req, model=model, project_id=project_id)
 
         last_error = ""
         for endpoint in _endpoints():
-            response = requests.post(
-                f"{endpoint}:generateContent",
-                headers=_headers(token),
-                json=body,
-                timeout=CLI_TIMEOUT,
-            )
+            try:
+                response = requests.post(
+                    f"{endpoint}:generateContent",
+                    headers=_headers(token),
+                    json=body,
+                    timeout=CLI_TIMEOUT,
+                )
+            except requests.RequestException as exc:
+                last_error = f"connection error: {exc}"
+                continue
             if response.status_code < 400:
                 text = extract_text_from_generate_response(response.json())
                 if text:

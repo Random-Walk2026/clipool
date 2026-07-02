@@ -19,9 +19,12 @@ from typing import Iterator, Optional
 
 from .account import Account, load_accounts
 
-# 冷却时长（秒）
-COOLDOWN_QUOTA = int(60)     # 配额耗尽 / 限速
-COOLDOWN_TRANSIENT = int(15) # 瞬时错误（超时、5xx）
+# 冷却时长（秒）：基础值按连续失败次数指数放大（60→120→240…），封顶后不再翻倍。
+# 配额窗口动辄 5 小时，固定 60s 冷却会让耗尽的账号每分钟白烧一次子进程冷启动。
+COOLDOWN_QUOTA = int(60)          # 配额耗尽 / 限速（基础值）
+COOLDOWN_QUOTA_MAX = int(3600)    # 配额冷却上限
+COOLDOWN_TRANSIENT = int(15)      # 瞬时错误（超时、5xx，基础值）
+COOLDOWN_TRANSIENT_MAX = int(300) # 瞬时冷却上限
 
 # 永久禁用账号多久后允许半开探测一次（秒）。token 可能被外部重新登录修复，给个复活机会。
 RECOVERY_PROBE_AFTER = int(600)
@@ -53,6 +56,11 @@ def _is_quota_error(exc: BaseException) -> bool:
 def _is_transient_error(exc: BaseException) -> bool:
     msg = str(exc).lower()
     return any(k in msg for k in _TRANSIENT_KEYWORDS)
+
+
+def _backoff(base: int, consecutive_failures: int, cap: int) -> float:
+    """指数退避：第 n 次连续失败冷却 base * 2^n 秒，封顶 cap。"""
+    return float(min(base * (2 ** min(consecutive_failures, 6)), cap))
 
 
 class AccountPool:
@@ -154,9 +162,11 @@ class AccountPool:
             account.disable(f"{reason}: {str(exc)[:200]}")
             account.persist()
         elif exc is not None and _is_quota_error(exc):
-            account.cool_down(COOLDOWN_QUOTA)
+            account.cool_down(_backoff(COOLDOWN_QUOTA, account.error_count, COOLDOWN_QUOTA_MAX))
         else:
-            account.cool_down(COOLDOWN_TRANSIENT)
+            account.cool_down(
+                _backoff(COOLDOWN_TRANSIENT, account.error_count, COOLDOWN_TRANSIENT_MAX)
+            )
 
     def status(self) -> dict:
         """返回所有 backend 的账号状态，供管理 API 展示。"""

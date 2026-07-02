@@ -113,9 +113,13 @@ export COPILOT_GITHUB_TOKEN="..."
 
 | 错误类型 | 处理方式 |
 |---|---|
-| 超时、5xx 等瞬时错误 | 冷却 15 秒，自动恢复 |
-| 429 配额 / 限速 | 冷却 60 秒，自动恢复 |
+| 超时、5xx 等瞬时错误 | 冷却 15 秒起，连续失败 ×2 递增（上限 5 分钟），成功即归零 |
+| 429 配额 / 限速 | 冷却 60 秒起，连续失败 ×2 递增（上限 1 小时），成功即归零 |
 | `invalid_grant`、401、token 撤销 | **永久禁用**，写回 JSON 文件，重启不再死磕 |
+
+> 池中有账号但全部冷却/禁用时**直接报错**，不会回落到进程默认登录态；
+> 只有该 backend 一个账号文件都没有时才用默认登录态（单账号模式）。
+> token 还是 `YOUR_...` 占位符的模板文件不入池。
 
 永久禁用后，JSON 文件会自动写入：
 
@@ -167,12 +171,12 @@ export ANTIGRAVITY_OAUTH_CLIENT_SECRET="..."
 在服务运行期间新增或修改账号文件后，无需重启：
 
 ```bash
-curl -X POST http://127.0.0.1:8317/v0/management/reload
+curl -X POST http://127.0.0.1:8318/v0/management/reload
 ```
 
 查看当前账号池状态：
 
 ```bash
-curl http://127.0.0.1:8317/v0/management/accounts
-curl http://127.0.0.1:8317/v0/management/accounts/antigravity
+curl http://127.0.0.1:8318/v0/management/accounts
+curl http://127.0.0.1:8318/v0/management/accounts/antigravity
 ```

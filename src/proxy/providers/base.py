@@ -12,6 +12,7 @@ import os
 import subprocess
 import tempfile
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Optional
 
 from ..config import CLI_TIMEOUT
@@ -60,21 +61,36 @@ class BaseProvider(ABC):
         stdin: Optional[str] = None,
         env_override: Optional[dict[str, str]] = None,
     ) -> subprocess.CompletedProcess:
-        """线程安全地运行 subprocess，env_override 作为额外环境变量注入。"""
+        """线程安全地运行 subprocess，env_override 作为额外环境变量注入。
+
+        stdout/stderr 落临时文件而不用 PIPE：agy 这类 CLI 会 spawn 孙进程
+        （钥匙串查询、language server），它们继承管道且可能比 CLI 活得久——
+        PIPE 模式要等**所有**持有者关闭写端才返回（实测被卡住过），
+        文件模式在直接子进程退出后立即返回，孤儿进程与我们无关。
+        """
         env: Optional[dict[str, str]] = None
         if env_override:
             env = os.environ.copy()
             env.update(env_override)
+        out_fd, out_path = tempfile.mkstemp(suffix=".stdout")
+        err_fd, err_path = tempfile.mkstemp(suffix=".stderr")
         try:
-            return subprocess.run(
-                cmd,
-                input=stdin,
-                capture_output=True,
-                text=True,
-                timeout=CLI_TIMEOUT,
-                cwd=tempfile.gettempdir(),
-                env=env,
-            )
+            with os.fdopen(out_fd, "w", encoding="utf-8") as out_f, \
+                 os.fdopen(err_fd, "w", encoding="utf-8") as err_f:
+                proc = subprocess.run(
+                    cmd,
+                    input=stdin,
+                    stdout=out_f,
+                    stderr=err_f,
+                    text=True,
+                    timeout=CLI_TIMEOUT,
+                    cwd=tempfile.gettempdir(),
+                    env=env,
+                    start_new_session=True,  # 孙进程不挂在我们的进程组下
+                )
+            stdout = Path(out_path).read_text(encoding="utf-8", errors="replace")
+            stderr = Path(err_path).read_text(encoding="utf-8", errors="replace")
+            return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
         except FileNotFoundError:
             raise RuntimeError(
                 f"找不到 {self.label} CLI（{cmd[0]}）。"
@@ -82,3 +98,9 @@ class BaseProvider(ABC):
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"{self.label} CLI 调用超时（>{CLI_TIMEOUT}s）。")
+        finally:
+            for p in (out_path, err_path):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass

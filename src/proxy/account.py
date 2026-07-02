@@ -317,6 +317,12 @@ def _parse_expiry_ts(value: object) -> float:
     return parsed.timestamp()
 
 
+def _looks_placeholder(token: str) -> bool:
+    """模板里没替换的占位 token（YOUR_XXX_TOKEN…）——入池只会白吃一次失败+冷却。"""
+    upper = token.upper()
+    return upper.startswith("YOUR_") or upper.startswith("<YOUR") or "XXXXX" in upper
+
+
 def _account_from_file(path: Path) -> Optional[Account]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -333,6 +339,8 @@ def _account_from_file(path: Path) -> Optional[Account]:
         or data.get("key")
         or ""
     ).strip()
+    if _looks_placeholder(token):
+        token = ""  # 占位 token 视同无 token；下方「无任何可注入信息则跳过」兜底
     home = str(data.get("home", "")).strip()
     if home:
         home = str(Path(home).expanduser())

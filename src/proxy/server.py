@@ -16,7 +16,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -27,10 +27,12 @@ from .anthropic import (
     AnthropicMessagesRequest,
     anthropic_message_body,
     anthropic_sse_response,
+    content_to_text,
     estimated_token_count,
 )
+from .executor import execute_with_pool, run_with_pool
 from .pool import get_pool
-from .providers import get_provider, SUPPORTED
+from .providers import SUPPORTED
 from .providers.antigravity_http import AntigravityHTTPProvider
 from .quota import QUOTA_SUPPORTED, refresh_quota, supports_quota
 from .router import parse_model
@@ -46,7 +48,6 @@ _UI_DIR = Path(
 # CLI subprocess 在专用线程池里跑
 _executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="cli_proxy")
 
-MAX_RETRIES = 3  # 最多尝试几个账号
 _antigravity_http_provider = AntigravityHTTPProvider()
 
 
@@ -54,7 +55,9 @@ _antigravity_http_provider = AntigravityHTTPProvider()
 
 class Message(BaseModel):
     role: str
-    content: str
+    # OpenAI 客户端既发纯字符串也发 content parts 列表（[{"type":"text","text":...}]），
+    # 复用 anthropic.content_to_text 摊平（两种 parts 形状兼容）。
+    content: Any = ""
 
 
 class CompletionRequest(BaseModel):
@@ -63,6 +66,9 @@ class CompletionRequest(BaseModel):
     stream: bool = False
     max_tokens: Optional[int] = None
     temperature: Optional[float] = None
+    # OpenAI 的思考强度字段。model 串没写 @effort 时兜底用它
+    # （agent_workflow 的 llm.transport_http 对 gpt-*/grok-* 正是这么传的）。
+    reasoning_effort: Optional[str] = None
 
 
 # ── 消息 → 纯文本 ─────────────────────────────────────────────────────────────
@@ -70,12 +76,13 @@ class CompletionRequest(BaseModel):
 def _to_text(messages: list[Message]) -> str:
     parts: list[str] = []
     for m in messages:
+        text = content_to_text(m.content)
         if m.role == "system":
-            parts.append(f"[System]\n{m.content}")
+            parts.append(f"[System]\n{text}")
         elif m.role == "user":
-            parts.append(m.content)
+            parts.append(text)
         else:
-            parts.append(f"[{m.role.capitalize()}]\n{m.content}")
+            parts.append(f"[{m.role.capitalize()}]\n{text}")
     return "\n\n".join(parts)
 
 
@@ -121,53 +128,14 @@ async def _stream_response(
     yield "data: [DONE]\n\n"
 
 
-# ── CLI 执行（含账号轮换 + 重试）────────────────────────────────────────────
+# ── CLI 执行（含账号轮换 + 重试；同步逻辑统一在 executor.py）─────────────────
 
-async def _run_with_pool(
-    provider_name: str,
-    text: str,
-    model: str,
-    effort: str,
-    *,
-    max_retries: int = MAX_RETRIES,
-) -> str:
-    """在线程池里跑 CLI，多账号轮换，失败时自动重试。"""
-    pool = get_pool()
-    provider = get_provider(provider_name)
-    last_exc: Optional[Exception] = None
-    tried: set[str] = set()
-
-    attempts = max(1, max_retries, len(pool.accounts(provider_name)))
-    for _ in range(attempts):
-        account = pool.pick(provider_name)
-        env_override = account.env_override() if account else None
-        acct_id = account.id if account else "env-default"
-
-        if acct_id in tried:
-            break  # 已经试过所有账号
-        tried.add(acct_id)
-
-        loop = asyncio.get_event_loop()
-        try:
-            content = await loop.run_in_executor(
-                _executor,
-                lambda acc=account, env=env_override: provider.run(
-                    text, model, effort, env_override=env
-                ),
-            )
-            if account:
-                pool.mark_success(account)
-            return content
-        except RuntimeError as exc:
-            last_exc = exc
-            if account:
-                pool.mark_failed(account, exc)
-            print(
-                f"  [cli_proxy] {provider_name}/{acct_id} 失败：{exc}；"
-                f"{'继续尝试下一个账号…' if _ + 1 < max_retries else '已无可用账号。'}"
-            )
-
-    raise last_exc or RuntimeError(f"{provider_name} 所有账号均不可用。")
+async def _run_with_pool(provider_name: str, text: str, model: str, effort: str) -> str:
+    """在线程池里跑 CLI，多账号轮换由 proxy.executor 统一处理。"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _executor, lambda: run_with_pool(provider_name, text, model, effort)
+    )
 
 
 def _authorize_optional(request: Request) -> None:
@@ -185,51 +153,26 @@ def _authorize_optional(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid CLI_PROXY_API_KEY")
 
 
-async def _run_anthropic_with_pool(
-    req: AnthropicMessagesRequest,
-    *,
-    max_retries: int = MAX_RETRIES,
-) -> str:
-    """Run Anthropic /v1/messages through Antigravity profile accounts."""
+async def _run_anthropic_with_pool(req: AnthropicMessagesRequest) -> str:
+    """Run Anthropic /v1/messages through Antigravity profile accounts.
 
-    pool = get_pool()
-    last_exc: Optional[Exception] = None
-    tried: set[str] = set()
+    轮换/冷却语义与 /v1/chat/completions 完全一致（executor.execute_with_pool）：
+    池中有账号时绝不回落到默认 HOME，池为空才用进程默认登录态跑一次。
+    """
 
-    attempts = max(1, max_retries, len(pool.accounts("antigravity")))
-    for _ in range(attempts):
-        account = pool.pick("antigravity")
+    def _call(account: Optional[Account]) -> str:
         if account is None:
             account = Account(
                 backend="antigravity",
                 id="env-default",
                 home=os.environ.get("HOME", ""),
             )
-        acct_id = account.id
+        return _antigravity_http_provider.run_messages(req, account)
 
-        if acct_id in tried:
-            break
-        tried.add(acct_id)
-
-        loop = asyncio.get_event_loop()
-        try:
-            content = await loop.run_in_executor(
-                _executor,
-                lambda acc=account: _antigravity_http_provider.run_messages(req, acc),
-            )
-            if account.id != "env-default":
-                pool.mark_success(account)
-            return content
-        except RuntimeError as exc:
-            last_exc = exc
-            if account.id != "env-default":
-                pool.mark_failed(account, exc)
-            print(
-                f"  [cli_proxy] antigravity/{acct_id} 失败：{exc}；"
-                f"{'继续尝试下一个账号…' if _ + 1 < max_retries else '已无可用账号。'}"
-            )
-
-    raise last_exc or RuntimeError("antigravity 所有账号均不可用。")
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _executor, lambda: execute_with_pool("antigravity", _call)
+    )
 
 
 # ── 路由 ──────────────────────────────────────────────────────────────────────
@@ -268,8 +211,11 @@ async def list_models():
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(req: CompletionRequest):
+async def chat_completions(req: CompletionRequest, request: Request):
+    _authorize_optional(request)
     provider_name, model, effort = parse_model(req.model)
+    # model 串没写 @effort 时，用 OpenAI 的 reasoning_effort 字段兜底
+    effort = effort or (req.reasoning_effort or "").strip()
 
     if provider_name not in SUPPORTED:
         raise HTTPException(

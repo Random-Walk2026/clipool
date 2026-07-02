@@ -74,7 +74,7 @@ client = TestClient(server.app)
 response = client.post("/v1/messages", json={...})
 ```
 
-不会真正监听 8317 端口，适合在 CI 里验证路由、响应 JSON 结构、SSE 格式和鉴权逻辑。上游真实连通性单独用最小 curl 验证。
+不会真正监听 8318 端口，适合在 CI 里验证路由、响应 JSON 结构、SSE 格式和鉴权逻辑。上游真实连通性单独用最小 curl 验证。
 
 ## 6. 可选鉴权：本地 API Key
 

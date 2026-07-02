@@ -35,11 +35,11 @@ python -m pip install -e /Users/lyzhk/GitHub/cli_proxy
 # 2. 配置账号（见下文）
 
 # 3. 启动服务
-python -m proxy              # 默认 127.0.0.1:8317
-python -m proxy --port 8318  # 指定端口
+python -m proxy              # 默认 127.0.0.1:8318（8317 留给 Go 版 CLIProxyAPI 常驻服务，避免撞车）
+python -m proxy --port 8319  # 指定端口（也可用 CLI_PROXY_PORT 环境变量改默认值）
 
 # 4. 调用
-curl http://127.0.0.1:8317/v1/chat/completions \
+curl http://127.0.0.1:8318/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer any-value" \
   -d '{"model":"claude/sonnet@high","messages":[{"role":"user","content":"你好"}]}'
@@ -95,10 +95,10 @@ cli_proxy --help  # CLI 脚本入口名仍是 cli_proxy
 
 ```bash
 # 1. 启动本地代理
-python -m proxy --port 8317
+python -m proxy --port 8318
 
 # 2. 让 Claude Code 指向本地代理
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8317"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8318"
 export ANTHROPIC_AUTH_TOKEN="local-any-value"
 
 # 3. 正常启动 Claude Code
@@ -109,9 +109,9 @@ claude --model claude-sonnet-4-6
 
 ```bash
 export CLI_PROXY_API_KEY="your-local-secret"
-python -m proxy --port 8317
+python -m proxy --port 8318
 
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8317"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8318"
 export ANTHROPIC_AUTH_TOKEN="your-local-secret"
 claude --model claude-sonnet-4-6
 ```
@@ -139,6 +139,8 @@ claude --model claude-sonnet-4-6
 **文件名规则**：随意命名，只要以 `.json` 结尾即可。`type` 字段决定属于哪个 backend。
 
 **多账号**：同一 backend 放多个文件 → 自动 round-robin 轮换，失败账号自动冷却并切换下一个。
+
+**占位符保护**：token 还是模板占位（`YOUR_...`、`XXXXX`）的文件不会入池——没填完的模板不会在轮换里白吃失败。
 
 **权限建议**：
 
@@ -311,21 +313,30 @@ Antigravity CLI（`agy`）没有独立的 `--effort` 参数，思考强度通过
 
 ## 三种调用方式
 
-### 方式 A：直接调 runner（无 HTTP 开销，适合同进程内嵌）
+### 方式 A：进程内直接调用（无 HTTP 开销，适合同进程内嵌）
 
 ```python
-from proxy.runner import run_cli
+from proxy import run_with_pool
 
-reply = run_cli("claude", "你好", model="sonnet", effort="high")
+reply = run_with_pool("claude", "你好", model="sonnet", effort="high")
 print(reply)
 ```
+
+`run_with_pool` 与 HTTP 服务共用同一套账号池语义（轮换 / 冷却 / 永久禁用），
+**无需启动服务**，也不需要 fastapi/requests 等重依赖。只想单跑一次、绕过账号池时
+用底层的 `proxy.runner.run_cli`。
+
+> 📌 **agent_workflow 集成**：`~/GitHub/agent_workflow` 的 `llm/transport_cli.py`
+> 检测到本包已安装（`pip install -e ~/GitHub/cli_proxy`）时自动委托
+> `run_with_pool`——其 subprocess「真联网」路线由此获得多账号轮换，并顺带支持
+> grok/copilot 的 subprocess 传输。设 `LLM_CLI_POOL=0` 可退回其自带单账号实现。
 
 ### 方式 B：HTTP 客户端（先 `python -m proxy` 启动服务）
 
 ```python
 from proxy import get_client
 
-client = get_client()   # 默认 http://127.0.0.1:8317/v1
+client = get_client()   # 默认 http://127.0.0.1:8318/v1
 resp = client.chat.completions.create(
     model="claude/sonnet@high",
     messages=[{"role": "user", "content": "你好"}],
@@ -353,27 +364,27 @@ print(result.content)
 
 ```bash
 # 查看所有账号状态
-curl http://127.0.0.1:8317/v0/management/accounts
+curl http://127.0.0.1:8318/v0/management/accounts
 
 # 查看指定 backend 的账号
-curl http://127.0.0.1:8317/v0/management/accounts/claude
+curl http://127.0.0.1:8318/v0/management/accounts/claude
 
 # 添加账号文件后重新加载（无需重启服务）
-curl -X POST http://127.0.0.1:8317/v0/management/reload
+curl -X POST http://127.0.0.1:8318/v0/management/reload
 
 # 启用 / 禁用 / 重置 / 刷新额度（action ∈ enable | disable | reset | refresh_quota）
-curl -X POST http://127.0.0.1:8317/v0/management/accounts/action \
+curl -X POST http://127.0.0.1:8318/v0/management/accounts/action \
   -H "Content-Type: application/json" \
   -d '{"backend":"claude","id":"work@example.com","action":"disable"}'
 
 # 刷新所有账号的额度（5 小时 / 周；目前支持 codex / claude / antigravity）
-curl -X POST http://127.0.0.1:8317/v0/management/quota/refresh
+curl -X POST http://127.0.0.1:8318/v0/management/quota/refresh
 
 # 查看可用模型列表
-curl http://127.0.0.1:8317/v1/models
+curl http://127.0.0.1:8318/v1/models
 
 # 健康检查
-curl http://127.0.0.1:8317/health
+curl http://127.0.0.1:8318/health
 ```
 
 账号状态返回示例：
@@ -403,7 +414,7 @@ curl http://127.0.0.1:8317/health
 
 **① 内嵌 HTML 面板（零依赖，随服务自带）**
 
-服务启动后直接访问 <http://127.0.0.1:8317/>（或 `/dashboard`）。卡片式展示各 backend 的账号、状态徽章（🟢 可用 / 🟡 冷却中 / 🔴 已禁用）、脱敏令牌、优先级/权重、令牌到期倒计时、冷却剩余、失败次数、禁用原因，5 秒自动刷新。无需安装任何额外依赖。
+服务启动后直接访问 <http://127.0.0.1:8318/>（或 `/dashboard`）。卡片式展示各 backend 的账号、状态徽章（🟢 可用 / 🟡 冷却中 / 🔴 已禁用）、脱敏令牌、优先级/权重、令牌到期倒计时、冷却剩余、失败次数、禁用原因，5 秒自动刷新。无需安装任何额外依赖。
 
 点「刷新额度」可拉取各账号的 **5 小时 / 周额度**（进度条 + 重置倒计时 + 套餐类型）。额度查询较慢且有限流，因此不随状态自动刷新，按需手动触发。
 
@@ -429,7 +440,7 @@ python -m pip install -e ".[ui]"            # 安装 streamlit
 python -m streamlit run ui/streamlit_app.py
 ```
 
-默认连接 <http://127.0.0.1:8317>，可用 `CLI_PROXY_URL` 环境变量或左侧栏修改；若服务设了 `CLI_PROXY_API_KEY`，在左侧栏填入即可。操作按钮通过 `/v0/management/accounts/action` 端点生效并落盘，含每账号「额度」按钮与左侧栏「刷新额度」批量按钮，额度以进度条展示 5 小时 / 周用量。
+默认连接 <http://127.0.0.1:8318>，可用 `CLI_PROXY_URL` 环境变量或左侧栏修改；若服务设了 `CLI_PROXY_API_KEY`，在左侧栏填入即可。操作按钮通过 `/v0/management/accounts/action` 端点生效并落盘，含每账号「额度」按钮与左侧栏「刷新额度」批量按钮，额度以进度条展示 5 小时 / 周用量。
 
 ---
 
@@ -440,6 +451,7 @@ python -m streamlit run ui/streamlit_app.py
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `CLI_PROXY_AUTH_DIR` | `~/.cli_proxy_api` | 认证文件目录 |
+| `CLI_PROXY_PORT` | `8318` | 服务默认端口（8317 留给 Go 版 CLIProxyAPI）|
 | `AGENT_LLM_CLI_TIMEOUT` | `600` | CLI 调用超时（秒）|
 | `CLAUDE_CLI_BIN` | `claude` | Claude CLI 可执行文件路径 |
 | `CODEX_CLI_BIN` | `codex` | Codex CLI 可执行文件路径 |
@@ -458,14 +470,19 @@ python -m streamlit run ui/streamlit_app.py
 
 ## 冷却机制
 
-账号失败时自动进入冷却，冷却期间跳过并切换下一个账号：
+账号失败时自动进入冷却，冷却期间跳过并切换下一个账号。冷却时长按**连续失败次数指数放大**（成功一次即归零）：
 
-| 错误类型 | 冷却时长 |
-|---------|--------|
-| 配额耗尽 / 限速（429、quota exceeded）| 60 秒 |
-| 瞬时错误（超时、5xx、连接失败）| 15 秒 |
+| 错误类型 | 首次 | 连续失败 | 上限 |
+|---------|------|---------|------|
+| 配额耗尽 / 限速(429、quota exceeded)| 60 秒 | ×2 递增(60→120→240…) | 1 小时 |
+| 瞬时错误(超时、5xx、连接失败)| 15 秒 | ×2 递增 | 5 分钟 |
+| 认证失效(invalid_grant、401、token 撤销)| 永久禁用并落盘 | 600 秒后半开探测一次 | — |
 
 冷却结束后自动恢复参与轮换，无需手动干预。
+
+> ⚠️ **池中有账号但全部冷却/禁用时直接报错**，绝不回落到进程默认登录态——那等于
+> 静默偷用另一个账号的额度，antigravity 还可能因默认 HOME 未登录触发浏览器 OAuth。
+> 只有该 backend **一个账号文件都没有**时，才用默认登录态跑（单账号模式）。
 
 ---
 

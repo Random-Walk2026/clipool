@@ -7,7 +7,7 @@
 
     streamlit run ui/streamlit_app.py
 
-代理地址默认 http://127.0.0.1:8317，可用环境变量 CLI_PROXY_URL 覆盖，
+代理地址默认 http://127.0.0.1:8318，可用环境变量 CLI_PROXY_URL 覆盖，
 或在左侧栏直接修改。若设置了 CLI_PROXY_API_KEY，也在左侧栏填入。
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 import requests
 import streamlit as st
 
-DEFAULT_URL = os.environ.get("CLI_PROXY_URL", "http://127.0.0.1:8317")
+DEFAULT_URL = os.environ.get("CLI_PROXY_URL", "http://127.0.0.1:8318")
 STATUS_LABEL = {"available": "🟢 可用", "cooling": "🟡 冷却中", "disabled": "🔴 已禁用"}
 
 
@@ -178,7 +178,7 @@ def main() -> None:
         accounts = fetch_accounts()
     except requests.RequestException as exc:
         st.error(f"无法连接到 cli_proxy（{_base()}）：{exc}")
-        st.info("请确认服务已启动：`python -m proxy --port 8317`")
+        st.info("请确认服务已启动：`python -m proxy --port 8318`")
         return
 
     all_accts = [a for accs in accounts.values() for a in accs]

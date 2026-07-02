@@ -7,10 +7,10 @@
 
 快速上手
 --------
-启动服务（默认 8317 端口）::
+启动服务（默认 8318 端口；8317 留给 Go 版 CLIProxyAPI 常驻服务）::
 
     python -m proxy
-    python -m proxy --port 8318 --host 0.0.0.0
+    python -m proxy --port 8319 --host 0.0.0.0
 
 Python 调用（服务启动后）::
 
@@ -28,13 +28,17 @@ LangChain 调用::
     llm = get_langchain_model("claude/sonnet")
     print(llm.invoke("你好").content)
 
-或直接在代码里不启服务、只调 runner（无 HTTP 开销）::
+或直接在代码里不启服务、进程内调用（无 HTTP 开销）::
 
-    from proxy.runner import run_cli
-    print(run_cli("claude", "你好", model="sonnet", effort="high"))
+    from proxy import run_with_pool
+    print(run_with_pool("claude", "你好", model="sonnet", effort="high"))
+
+run_with_pool 走 ~/.cli_proxy_api/ 账号池（多账号轮换 + 冷却 + 永久禁用），
+与 HTTP 服务语义一致；只想跑单次、绕过账号池时用 proxy.runner.run_cli。
 """
 
 from .config import DEFAULT_PORT, DEFAULT_URL
+from .executor import run_with_pool
 from .providers import SUPPORTED
 from .router import parse_model, is_cli_model
 
@@ -44,6 +48,7 @@ __all__ = [
     "SUPPORTED",
     "parse_model",
     "is_cli_model",
+    "run_with_pool",
     "get_client",
     "get_langchain_model",
 ]

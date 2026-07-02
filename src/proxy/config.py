@@ -45,7 +45,8 @@ def load_project_env(path: Path | None = None) -> None:
 
 load_project_env()
 
-DEFAULT_PORT = 8317
+# 8317 留给原作者的 Go 版 CLIProxyAPI（本机 brew 常驻服务）；本包默认 8318 避免撞车。
+DEFAULT_PORT = int(os.environ.get("CLI_PROXY_PORT", "8318"))
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_URL = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
 

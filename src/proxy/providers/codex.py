@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
 
-from ..config import CODEX_BIN, CLI_TIMEOUT
+from ..config import CODEX_BIN
 from .base import BaseProvider
 
 
@@ -41,26 +40,7 @@ class CodexProvider(BaseProvider):
                 cmd += ["-m", model]
             cmd.append(text)
 
-            env: Optional[dict[str, str]] = None
-            if env_override:
-                env = os.environ.copy()
-                env.update(env_override)
-            try:
-                proc = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=CLI_TIMEOUT,
-                    cwd=tempfile.gettempdir(),
-                    env=env,
-                )
-            except FileNotFoundError:
-                raise RuntimeError(
-                    f"找不到 Codex CLI（{CODEX_BIN}）。请先安装并登录，或设置 CODEX_CLI_BIN。"
-                )
-            except subprocess.TimeoutExpired:
-                raise RuntimeError(f"Codex CLI 调用超时（>{CLI_TIMEOUT}s）。")
-
+            proc = self._run_subprocess(cmd, env_override=env_override)
             if proc.returncode != 0:
                 err = (proc.stderr or proc.stdout or "").strip()
                 raise RuntimeError(f"Codex CLI 失败（exit {proc.returncode}）：{err[:500]}")

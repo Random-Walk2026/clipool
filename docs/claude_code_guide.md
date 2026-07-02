@@ -6,7 +6,7 @@
 
 你有多个 Antigravity 账号，额度分散在不同 Google 账号里。`proxy` 做三件事：
 
-1. 暴露本地 HTTP 服务：`http://127.0.0.1:8317/v1/messages`
+1. 暴露本地 HTTP 服务：`http://127.0.0.1:8318/v1/messages`
 2. 兼容 Claude Code 的 Anthropic API 请求格式
 3. 从 `~/.cli_proxy_api/` 读取多个 Antigravity profile，按账号池轮换使用
 
@@ -14,7 +14,7 @@
 
 ```text
 Claude Code
-  -> ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+  -> ANTHROPIC_BASE_URL=http://127.0.0.1:8318
   -> proxy /v1/messages
   -> AccountPool 选择一个 antigravity profile（含主备号路由）
   -> 读取 profile 内的 antigravity-oauth-token（按需自动刷新）
@@ -65,28 +65,28 @@ token 文件实际位于：
 ## 启动本地代理
 
 ```bash
-python -m proxy --port 8317
+python -m proxy --port 8318
 ```
 
 验证：
 
 ```bash
-curl http://127.0.0.1:8317/health
+curl http://127.0.0.1:8318/health
 # {"status":"ok","version":"2.0.0"}
 
-curl http://127.0.0.1:8317/v0/management/accounts/antigravity
+curl http://127.0.0.1:8318/v0/management/accounts/antigravity
 ```
 
 新增或修改账号 JSON 后，无需重启：
 
 ```bash
-curl -X POST http://127.0.0.1:8317/v0/management/reload
+curl -X POST http://127.0.0.1:8318/v0/management/reload
 ```
 
 ## 接入 Claude Code
 
 ```bash
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8317"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8318"
 export ANTHROPIC_AUTH_TOKEN="local-any-value"
 claude --model claude-sonnet-4-6
 ```
@@ -96,10 +96,10 @@ claude --model claude-sonnet-4-6
 ```bash
 # 启动代理时：
 export CLI_PROXY_API_KEY="your-local-secret"
-python -m proxy --port 8317
+python -m proxy --port 8318
 
 # 另一个终端：
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8317"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8318"
 export ANTHROPIC_AUTH_TOKEN="your-local-secret"   # 与 CLI_PROXY_API_KEY 一致
 claude --model claude-sonnet-4-6
 ```
@@ -111,7 +111,7 @@ claude --model claude-sonnet-4-6
 不启动 Claude Code，直接 curl 验证代理是否正常：
 
 ```bash
-curl http://127.0.0.1:8317/v1/messages \
+curl http://127.0.0.1:8318/v1/messages \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer local-any-value" \
   -d '{
@@ -150,7 +150,7 @@ HOME="$HOME/.cli_proxy_api/profiles/agy_main" agy -p "ping"
 `proxy` 会把失败账号冷却一段时间，自动尝试下一个账号：
 
 ```bash
-curl http://127.0.0.1:8317/v0/management/accounts/antigravity
+curl http://127.0.0.1:8318/v0/management/accounts/antigravity
 ```
 
 `cooling: true` 表示该账号临时跳过，`disabled: true` 表示 token 彻底失效（需重新登录后等待自动恢复探测，或手动 reload）。
