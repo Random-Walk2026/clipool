@@ -18,6 +18,10 @@
 """
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +30,11 @@ from .base import BaseProvider
 
 # agy 登录态文件（相对 HOME）。没有它就别跑 agy——否则 agy 会弹浏览器要 OAuth 登录。
 _AGY_TOKEN_RELATIVE = Path(".gemini") / "antigravity-cli" / "antigravity-oauth-token"
+
+# profile HOME 下的登录钥匙串（相对 HOME）。
+# agy 通过 go-keyring shell 出 /usr/bin/security 存取 token 副本；HOME 被重定向后
+# security 找到的是这个从未被 loginwindow 解锁过的钥匙串，每次访问都会弹密码框。
+_PROFILE_KEYCHAIN_RELATIVE = Path("Library") / "Keychains" / "login.keychain-db"
 
 _EFFORT_SUFFIXES = ("low", "medium", "high", "thinking")
 
@@ -77,6 +86,58 @@ def resolve_variant(model: str, effort: str) -> str:
 antigravity_model_variant = resolve_variant
 
 
+# ── profile 钥匙串静默化（仅 macOS）──────────────────────────────────────────
+# 目标：agy 的钥匙串查询在重定向 HOME 下静默成功，而不是弹「输入钥匙串密码」框。
+# 做法：给每个 profile 一个空密码、永不自动上锁、已解锁的 login 钥匙串。
+# 解锁状态由 securityd 按钥匙串文件缓存，重启后失效——所以每个进程对每个 home
+# 至少跑一次（_prepared_homes 记忆化，热路径零开销）。
+
+_prepared_homes: set[str] = set()
+_prepare_lock = threading.Lock()
+
+
+def _security(args: list[str], home: str) -> subprocess.CompletedProcess:
+    """跑 /usr/bin/security，HOME 指向 profile（default-keychain 解析要用）。"""
+    env = os.environ.copy()
+    env["HOME"] = home
+    return subprocess.run(
+        ["/usr/bin/security", *args],
+        env=env, capture_output=True, text=True, timeout=15,
+    )
+
+
+def ensure_profile_keychain(home: str) -> None:
+    """确保 profile HOME 下的登录钥匙串可被静默访问（幂等，失败不抛错）。
+
+    钥匙串不存在 → 以空密码创建；解锁失败（密码未知，通常是系统在首次弹窗时
+    自动生成的）→ 删掉重建。重建是安全的：agy 真正的登录态在
+    antigravity-oauth-token 文件里，钥匙串里只是一份冗余副本，agy 写入失败
+    会自动回落到文件（binary 内有 "falling back to file" 路径）。
+    """
+    if sys.platform != "darwin":
+        return
+    home = str(Path(home).expanduser())
+    if home in _prepared_homes:
+        return
+    with _prepare_lock:
+        if home in _prepared_homes:
+            return
+        kc = Path(home) / _PROFILE_KEYCHAIN_RELATIVE
+        try:
+            if not kc.exists():
+                kc.parent.mkdir(parents=True, exist_ok=True)
+                _security(["create-keychain", "-p", "", str(kc)], home)
+            if _security(["unlock-keychain", "-p", "", str(kc)], home).returncode != 0:
+                kc.unlink(missing_ok=True)
+                _security(["create-keychain", "-p", "", str(kc)], home)
+                _security(["unlock-keychain", "-p", "", str(kc)], home)
+            # 无 -t/-l 参数 = 永不超时上锁、休眠不上锁
+            _security(["set-keychain-settings", str(kc)], home)
+        except (OSError, subprocess.SubprocessError):
+            pass  # 钥匙串修不好也不挡调用：agy 有文件兜底，最多退回弹窗现状
+        _prepared_homes.add(home)
+
+
 class AntigravityProvider(BaseProvider):
     """Antigravity (Google Cloud Code Assist) CLI（agy --print）。
 
@@ -91,6 +152,9 @@ class AntigravityProvider(BaseProvider):
         # 跑 agy 前先确认该账号 home 下有 OAuth 登录态：没有就直接报错，
         # 绝不让 agy 进入交互式登录弹出浏览器（曾因 home 指向空目录误触发）。
         self._ensure_logged_in(env_override)
+        home = (env_override or {}).get("HOME", "").strip()
+        if home:
+            ensure_profile_keychain(home)  # 静默化钥匙串，避免 security 弹密码框
         return super().run(text, model, effort, env_override=env_override)
 
     @staticmethod
