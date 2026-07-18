@@ -128,7 +128,7 @@ def _refresh_codex_token(account: Account) -> str:
     new_refresh = str(data.get("refresh_token", "")).strip()
     if new_refresh:
         account.refresh_token = new_refresh
-    account.persist()
+    account.persist(fields={"token", "refresh_token"})
     return access_token
 
 
@@ -241,7 +241,7 @@ def _refresh_claude_token(account: Account) -> str:
     new_refresh = str(data.get("refresh_token", "")).strip()
     if new_refresh:
         account.refresh_token = new_refresh
-    account.persist()
+    account.persist(fields={"token", "refresh_token"})
     return access_token
 
 
@@ -358,7 +358,7 @@ def _parse_agy_groups(groups: list) -> list[dict]:
         gname = str(g.get("displayName") or "Quota").strip()
         buckets = sorted(
             (b for b in g.get("buckets", []) if isinstance(b, dict)),
-            key=lambda b: _AGY_WINDOW_ORDER.get(b.get("window"), 9),
+            key=lambda b: _AGY_WINDOW_ORDER.get(str(b.get("window") or ""), 9),
         )
         for b in buckets:
             rf = b.get("remainingFraction")
@@ -449,10 +449,10 @@ def refresh_quota(account: Account, pre_refresh: bool = False) -> Optional[dict]
     except (requests.RequestException, RuntimeError, ValueError) as exc:
         account.quota_error = str(exc)
         account.quota_updated_at = time.time()
-        account.persist()
+        account.persist(fields={"quota"})
         raise RuntimeError(str(exc)) from exc
     account.quota = quota
     account.quota_error = ""
     account.quota_updated_at = time.time()
-    account.persist()
+    account.persist(fields={"quota"})
     return quota

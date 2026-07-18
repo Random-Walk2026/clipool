@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import unittest
 from pathlib import Path
 from typing import Optional
@@ -40,8 +41,9 @@ class _FakeProvider:
 
 def _make_pool(accounts: list[Account]) -> poolmod.AccountPool:
     pool = poolmod.AccountPool()
-    pool._accounts = {"claude": list(accounts)} if accounts else {}
-    pool._index = {"claude": 0}
+    backend = accounts[0].backend if accounts else "claude"
+    pool._accounts = {backend: list(accounts)} if accounts else {}
+    pool._index = {backend: 0}
     pool._loaded = True
     return pool
 
@@ -117,6 +119,22 @@ class NoFallthroughToDefaultLogin(_PatchedExecutorTest):
         self.assertIn("2 个账号全部失败", str(ctx.exception))
         self.assertIn("quota exceeded", str(ctx.exception))
 
+    def test_invalid_codex_config_never_runs_process_default_profile(self) -> None:
+        invalid = Account(
+            "codex",
+            "token-only",
+            token="ignored-token",
+            enabled=False,
+            disabled_reason="configuration_error: codex requires profile home",
+        )
+        provider = _FakeProvider()
+        self._patch(_make_pool([invalid]), provider)
+
+        with self.assertRaisesRegex(RuntimeError, "全部不可用"):
+            executor_mod.run_with_pool("codex", "hi")
+
+        self.assertEqual(provider.calls, [])
+
 
 class EmptyPoolSingleAccountMode(_PatchedExecutorTest):
     def test_zero_accounts_runs_with_default_login(self) -> None:
@@ -127,6 +145,77 @@ class EmptyPoolSingleAccountMode(_PatchedExecutorTest):
 
         self.assertEqual(result, "ok:default")
         self.assertEqual(provider.calls, [None])  # 无账号 env 注入
+
+
+class ReloadNeverFallsThroughToDefaultLogin(_PatchedExecutorTest):
+    def test_request_during_reload_uses_old_snapshot(self) -> None:
+        old = Account("claude", "old", token="old-token")
+        new = Account("claude", "new", token="new-token")
+        pool = _make_pool([old])
+        provider = _FakeProvider()
+        self._patch(pool, provider)
+        load_started = threading.Event()
+        finish_load = threading.Event()
+        original_load = poolmod.load_accounts
+
+        def blocking_load() -> list[Account]:
+            load_started.set()
+            self.assertTrue(finish_load.wait(timeout=2))
+            return [new]
+
+        poolmod.load_accounts = blocking_load
+        reload_thread = threading.Thread(target=pool.reload)
+        try:
+            reload_thread.start()
+            self.assertTrue(load_started.wait(timeout=2))
+
+            result = executor_mod.run_with_pool("claude", "hi")
+
+            self.assertEqual(result, "ok:old-token")
+            self.assertEqual(
+                provider.calls, [{"CLAUDE_CODE_OAUTH_TOKEN": "old-token"}]
+            )
+        finally:
+            finish_load.set()
+            reload_thread.join(timeout=2)
+            poolmod.load_accounts = original_load
+
+
+class CodexModelAwareRouting(_PatchedExecutorTest):
+    def test_only_matching_codex_account_is_called(self) -> None:
+        legacy = Account(
+            "codex", "legacy", home="/tmp/legacy",
+            supported_models=frozenset({"gpt-5.5"}),
+        )
+        pro = Account(
+            "codex", "pro", home="/tmp/pro",
+            supported_models=frozenset({"gpt-5.6-terra"}),
+        )
+        provider = _FakeProvider()
+        self._patch(_make_pool([legacy, pro]), provider)
+
+        result = executor_mod.run_with_pool(
+            "codex", "hi", model="gpt-5.6-terra", effort="medium"
+        )
+
+        self.assertEqual(result, "ok:default")
+        self.assertEqual(provider.calls, [{"CODEX_HOME": "/tmp/pro"}])
+        self.assertFalse(legacy.is_cooling)
+
+    def test_no_compatible_account_fails_without_call_or_cooldown(self) -> None:
+        legacy = Account(
+            "codex", "legacy", home="/tmp/legacy",
+            supported_models=frozenset({"gpt-5.5"}),
+        )
+        provider = _FakeProvider()
+        self._patch(_make_pool([legacy]), provider)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            executor_mod.run_with_pool("codex", "hi", model="gpt-5.6-terra")
+
+        self.assertIn("没有支持模型 gpt-5.6-terra 的账号", str(ctx.exception))
+        self.assertEqual(provider.calls, [])
+        self.assertFalse(legacy.is_cooling)
 
 
 class ExponentialBackoff(unittest.TestCase):

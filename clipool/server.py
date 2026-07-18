@@ -10,15 +10,18 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import os
+import secrets
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -36,11 +39,12 @@ from .providers import SUPPORTED
 from .providers.antigravity_http import AntigravityHTTPProvider
 from .quota import QUOTA_SUPPORTED, refresh_quota, supports_quota
 from .router import parse_model
+from .version import __version__
 
-app = FastAPI(title="clipool API", version="2.0.0")
+app = FastAPI(title="clipool API", version=__version__)
 
-# 账号状态仪表盘 / Streamlit 管理台放在仓库根目录的 ui/ 下（不随包分发）。
-# 默认从源码树定位（clipool/server.py → 上一级是仓库根，ui/ 就在其下），可用 CLIPOOL_UI_DIR 覆盖。
+# 账号状态仪表盘 / Streamlit 管理台作为相邻的 ui 包随 wheel 分发。
+# 默认从 clipool 包的上一级定位，也可用 CLIPOOL_UI_DIR 覆盖开发/定制资源。
 _UI_DIR = Path(
     os.environ.get("CLIPOOL_UI_DIR") or (Path(__file__).resolve().parents[1] / "ui")
 )
@@ -49,6 +53,41 @@ _UI_DIR = Path(
 _executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="clipool")
 
 _antigravity_http_provider = AntigravityHTTPProvider()
+
+
+def _is_loopback_client(host: str) -> bool:
+    if host == "testclient":  # Starlette TestClient 的非网络 ASGI 标识。
+        return True
+    normalized = host.strip().strip("[]")
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    if address.is_loopback:
+        return True
+    return bool(
+        isinstance(address, ipaddress.IPv6Address)
+        and address.ipv4_mapped is not None
+        and address.ipv4_mapped.is_loopback
+    )
+
+
+@app.middleware("http")
+async def _enforce_network_boundary(request: Request, call_next):
+    """Direct uvicorn 也不能绕过 CLI 入口的非 loopback 安全边界。"""
+    if not os.environ.get("CLIPOOL_API_KEY", "").strip():
+        client = request.client
+        if client is not None and not _is_loopback_client(client.host):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": (
+                        "Non-loopback access requires CLIPOOL_API_KEY; "
+                        "start clipool on 127.0.0.1 or configure a key"
+                    )
+                },
+            )
+    return await call_next(request)
 
 
 # ── 请求 / 响应 schema ────────────────────────────────────────────────────────
@@ -149,7 +188,7 @@ def _authorize_optional(request: Request) -> None:
     if auth.lower().startswith("bearer "):
         token = auth[7:].strip()
     token = token or request.headers.get("x-api-key", "").strip()
-    if token != expected:
+    if not secrets.compare_digest(token.encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid CLIPOOL_API_KEY")
 
 
@@ -190,23 +229,50 @@ async def dashboard():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "2.0.0"}
+    return {"status": "ok", "version": __version__}
 
 
 @app.get("/v1/models")
-async def list_models():
+async def list_models(request: Request):
+    _authorize_optional(request)
     pool = get_pool()
-    status = pool.status()
     data = []
     for backend in SUPPORTED:
-        accounts = status.get(backend, [])
+        accounts = pool.accounts(backend)
         data.append({
             "id": backend,
             "object": "model",
             "created": 0,
             "owned_by": "clipool",
             "accounts": len(accounts),
+            "available_accounts": sum(a.is_available for a in accounts),
+            "capability": "backend-default",
         })
+        if backend == "codex":
+            discovered = sorted(
+                {
+                    model
+                    for account in accounts
+                    for model in (account.supported_models or ())
+                }
+            )
+            for model in discovered:
+                supporting = [
+                    a
+                    for a in accounts
+                    if a.supported_models is not None and model in a.supported_models
+                ]
+                data.append(
+                    {
+                        "id": model,
+                        "object": "model",
+                        "created": 0,
+                        "owned_by": backend,
+                        "accounts": len(supporting),
+                        "available_accounts": sum(a.is_available for a in supporting),
+                        "capability": "discovered",
+                    }
+                )
     return {"object": "list", "data": data}
 
 
@@ -271,14 +337,19 @@ async def anthropic_count_tokens(req: AnthropicMessagesRequest, request: Request
 
 # ── 管理 API（对齐 CLIProxyAPI /v0/management/*）────────────────────────────
 
-@app.get("/v0/management/accounts")
+@app.get(
+    "/v0/management/accounts", dependencies=[Depends(_authorize_optional)]
+)
 async def management_accounts():
     """列出所有 provider 的账号池状态（脱敏）。"""
     pool = get_pool()
     return {"accounts": pool.status()}
 
 
-@app.get("/v0/management/accounts/{backend}")
+@app.get(
+    "/v0/management/accounts/{backend}",
+    dependencies=[Depends(_authorize_optional)],
+)
 async def management_accounts_backend(backend: str):
     """列出指定 backend 的账号状态。"""
     if backend not in SUPPORTED:
@@ -294,17 +365,24 @@ class AccountAction(BaseModel):
     pre_refresh: bool = False  # refresh_quota 时是否强制先刷新 token（claude 默认 usage-first）
 
 
-@app.post("/v0/management/accounts/action")
+@app.post(
+    "/v0/management/accounts/action",
+    dependencies=[Depends(_authorize_optional)],
+)
 async def management_account_action(req: AccountAction):
     """对单个账号执行管理操作（启用 / 禁用 / 重置冷却 / 刷新额度）。供管理面板按钮调用。"""
     pool = get_pool()
     action = req.action.lower().strip()
-    if action == "enable":
-        acc = pool.set_enabled(req.backend, req.id, True)
-    elif action == "disable":
-        acc = pool.set_enabled(req.backend, req.id, False)
-    elif action == "reset":
-        acc = pool.reset_account(req.backend, req.id)
+    if action in {"enable", "disable", "reset"}:
+        try:
+            if action == "enable":
+                acc = pool.set_enabled(req.backend, req.id, True)
+            elif action == "disable":
+                acc = pool.set_enabled(req.backend, req.id, False)
+            else:
+                acc = pool.reset_account(req.backend, req.id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     elif action == "refresh_quota":
         acc = pool.find(req.backend, req.id)
         if acc is None:
@@ -331,7 +409,10 @@ async def management_account_action(req: AccountAction):
     return {"status": "ok", "account": acc.to_dict()}
 
 
-@app.post("/v0/management/quota/refresh")
+@app.post(
+    "/v0/management/quota/refresh",
+    dependencies=[Depends(_authorize_optional)],
+)
 async def management_quota_refresh(pre_refresh: bool = False):
     """刷新所有支持额度查询的账号（codex / claude），返回每个账号的结果。
 
@@ -345,7 +426,8 @@ async def management_quota_refresh(pre_refresh: bool = False):
             entry = {"backend": acc.backend, "id": acc.id}
             try:
                 await loop.run_in_executor(
-                    _executor, lambda a=acc: refresh_quota(a, pre_refresh=pre_refresh)
+                    _executor,
+                    partial(refresh_quota, acc, pre_refresh=pre_refresh),
                 )
                 entry["status"] = "ok"
             except RuntimeError as exc:
@@ -355,7 +437,9 @@ async def management_quota_refresh(pre_refresh: bool = False):
     return {"status": "ok", "results": results}
 
 
-@app.post("/v0/management/reload")
+@app.post(
+    "/v0/management/reload", dependencies=[Depends(_authorize_optional)]
+)
 async def management_reload():
     """重新从磁盘加载账号文件（添加新账号后调用）。"""
     get_pool().reload()

@@ -35,7 +35,13 @@ def _all_unavailable_message(backend: str, accounts: list[Account]) -> str:
     return "，".join(parts) + "。"
 
 
-def execute_with_pool(backend: str, fn: Callable[[Optional[Account]], str]) -> str:
+def execute_with_pool(
+    backend: str,
+    fn: Callable[[Optional[Account]], str],
+    *,
+    account_predicate: Optional[Callable[[Account], bool]] = None,
+    capability_label: str = "",
+) -> str:
     """在 backend 的账号池上执行 fn(account)，处理轮换与成败标记。
 
     fn 收到选中的账号（池为空时收到 None，表示用默认登录态），返回文本结果；
@@ -46,11 +52,19 @@ def execute_with_pool(backend: str, fn: Callable[[Optional[Account]], str]) -> s
     if not accounts:
         return fn(None)  # 单账号模式：无任何账号文件 / env 兜底
 
+    eligible = [a for a in accounts if account_predicate is None or account_predicate(a)]
+    if not eligible:
+        detail = f"支持{capability_label} 的" if capability_label else "符合请求能力的"
+        raise RuntimeError(
+            f"{backend} 账号池没有{detail}账号（共 {len(accounts)} 个）；"
+            "未调用 CLI，也未把不兼容账号记为失败。"
+        )
+
     tried: set[str] = set()
     last_exc: Optional[BaseException] = None
 
-    for _ in range(len(accounts)):
-        account = pool.pick(backend)
+    for _ in range(len(eligible)):
+        account = pool.pick(backend, predicate=account_predicate)
         if account is None or account.id in tried:
             break
         tried.add(account.id)
@@ -68,7 +82,7 @@ def execute_with_pool(backend: str, fn: Callable[[Optional[Account]], str]) -> s
         raise RuntimeError(
             f"{backend} 账号池 {len(tried)} 个账号全部失败，最后错误：{last_exc}"
         ) from last_exc
-    raise RuntimeError(_all_unavailable_message(backend, accounts))
+    raise RuntimeError(_all_unavailable_message(backend, eligible))
 
 
 def run_with_pool(
@@ -92,4 +106,19 @@ def run_with_pool(
             env.update(extra_env)
         return provider.run(text, model, effort, env_override=env or None)
 
-    return execute_with_pool(backend, _call)
+    account_predicate = None
+    capability_label = ""
+    if backend == "codex" and model:
+        selected_model = model
+
+        def account_predicate(account: Account) -> bool:
+            return account.supports_model(selected_model)
+
+        capability_label = f"模型 {model}"
+
+    return execute_with_pool(
+        backend,
+        _call,
+        account_predicate=account_predicate,
+        capability_label=capability_label,
+    )

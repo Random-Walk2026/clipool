@@ -71,6 +71,12 @@
     font-size: 12px; color: var(--text-dim);
     display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
   }
+  input.api-key {
+    width: 150px; background: var(--bg-card); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 9px; font-size: 12px;
+  }
+  input.api-key:focus { outline: none; border-color: var(--accent); }
 
   .summary {
     display: flex; gap: 14px; flex-wrap: wrap;
@@ -191,6 +197,8 @@
     <h1><span class="logo"></span> clipool 账号状态</h1>
     <div class="toolbar">
       <span class="meta" id="updated"></span>
+      <input class="api-key" type="password" id="apiKey" placeholder="API 密钥（当前会话）" autocomplete="off" />
+      <button class="refresh" id="saveKeyBtn">应用密钥</button>
       <label class="auto"><input type="checkbox" id="auto" checked /> 自动刷新</label>
       <label class="auto" title="拉取额度前强制刷新 token（claude 默认先试再刷，避开刷新端点限流）"><input type="checkbox" id="preRefresh" /> 预刷新</label>
       <button class="refresh" id="quotaBtn" title="拉取各账号的 5 小时 / 周额度（较慢）">刷新额度</button>
@@ -203,7 +211,27 @@
 
 <script>
 const REFRESH_MS = 5000;
+const API_KEY_STORAGE = "clipool.apiKey";
 let timer = null;
+
+function currentApiKey() {
+  return sessionStorage.getItem(API_KEY_STORAGE) || "";
+}
+
+function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  const key = currentApiKey();
+  if (key) headers.set("Authorization", "Bearer " + key);
+  return fetch(url, { ...options, headers });
+}
+
+function saveApiKey() {
+  const input = document.getElementById("apiKey");
+  const key = input.value.trim();
+  if (key) sessionStorage.setItem(API_KEY_STORAGE, key);
+  else sessionStorage.removeItem(API_KEY_STORAGE);
+  load();
+}
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c =>
@@ -345,7 +373,7 @@ function render(data) {
 
 async function load() {
   try {
-    const res = await fetch("/v0/management/accounts", { cache: "no-store" });
+    const res = await apiFetch("/v0/management/accounts", { cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     render(data);
@@ -372,7 +400,7 @@ async function refreshQuota() {
   try {
     const pre = document.getElementById("preRefresh").checked;
     const url = "/v0/management/quota/refresh" + (pre ? "?pre_refresh=true" : "");
-    const res = await fetch(url, { method: "POST" });
+    const res = await apiFetch(url, { method: "POST" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     await load();
   } catch (e) {
@@ -385,6 +413,11 @@ async function refreshQuota() {
 
 document.getElementById("refreshBtn").addEventListener("click", load);
 document.getElementById("quotaBtn").addEventListener("click", refreshQuota);
+document.getElementById("saveKeyBtn").addEventListener("click", saveApiKey);
+document.getElementById("apiKey").value = currentApiKey();
+document.getElementById("apiKey").addEventListener("keydown", event => {
+  if (event.key === "Enter") saveApiKey();
+});
 document.getElementById("auto").addEventListener("change", schedule);
 load();
 schedule();

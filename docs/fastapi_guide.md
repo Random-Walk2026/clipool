@@ -85,11 +85,15 @@ def _authorize_optional(request: Request) -> None:
         return   # 没配置就跳过
     token = request.headers.get("authorization", "")[7:]  # Bearer xxx
     token = token or request.headers.get("x-api-key", "")
-    if token != expected:
+    if not secrets.compare_digest(token.encode(), expected.encode()):
         raise HTTPException(status_code=401, detail="Invalid CLIPOOL_API_KEY")
 ```
 
-`CLIPOOL_API_KEY` 未设置时完全不鉴权，设置后 Bearer token 和 `x-api-key` 两种方式都兼容。
+`CLIPOOL_API_KEY` 未设置时保持 localhost 开发体验；设置后 Bearer token 和
+`x-api-key` 两种方式都兼容。生成接口和全部 `/v0/management/*` 都调用同一
+校验函数，避免“生成受保护但账号开关仍可匿名修改”的旁路。`/v1/models`
+同样受保护，因为它会暴露账号数量和 profile 缓存发现的 Codex 模型；只有面板
+外壳与 `/health` 保持公开，以便浏览器先加载页面再由前端携带 key。
 
 ## 7. 管理 API 设计
 
@@ -97,9 +101,14 @@ def _authorize_optional(request: Request) -> None:
 GET  /v0/management/accounts           # 所有 backend 账号状态（脱敏）
 GET  /v0/management/accounts/{backend} # 指定 backend
 POST /v0/management/reload             # 热重载账号文件，无需重启服务
+POST /v0/management/accounts/action    # 启用、禁用、重置、刷新单账号额度
+POST /v0/management/quota/refresh      # 刷新支持的账号额度
 ```
 
-账号 JSON 新增或修改后，`POST /reload` 即可生效，开发时不必反复重启。
+账号 JSON 新增或修改后，`POST /reload` 即可生效，开发时不必反复重启。实现上
+先离线读取完整快照，再原子切换请求世代；旧 Account 的迟到结果被忽略，读取期间
+若 revision 因持久化管理操作变化，则丢弃旧读取并重试。
+设置 `CLIPOOL_API_KEY` 后，上述所有管理路由都必须通过同一鉴权。
 
 ## 关键文件索引
 

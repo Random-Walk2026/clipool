@@ -15,7 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _run_auth_dir(cwd: Path, home: Path, *, env_auth_dir: str | None = None) -> str:
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(ROOT / "src")
+    # 本仓库是 flat layout（ROOT/clipool），不是 src layout；子进程会切到临时 cwd，
+    # 必须显式把真实仓库根放进 PYTHONPATH 才能验证 dotenv / HOME 行为。
+    env["PYTHONPATH"] = str(ROOT)
     env["HOME"] = str(home)
     env.pop("CLIPOOL_AUTH_DIR", None)
     if env_auth_dir is not None:

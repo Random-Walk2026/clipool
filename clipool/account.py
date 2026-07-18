@@ -24,15 +24,26 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
+import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Iterator, Optional
+
+try:  # Unix/macOS：账号文件也可能被另一个 clipool 进程刷新。
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback
+    fcntl = None  # type: ignore[assignment]
 
 from .config import load_project_env
+
+logger = logging.getLogger(__name__)
 
 # token 提前刷新余量（秒）：expiry 距现在不足这个值就当作需要刷新。
 # 对齐 cockpit-tools 的 ensure_fresh_token（300s 余量），比只在过期瞬间刷新更稳。
@@ -47,6 +58,83 @@ def _auth_dir_from_env() -> Path:
 
 
 AUTH_DIR = _auth_dir_from_env()
+
+_persist_locks_guard = threading.Lock()
+_persist_locks: dict[str, threading.Lock] = {}
+_persist_revision_lock = threading.Lock()
+_persist_revision = 0
+_PERSIST_FIELDS = frozenset(
+    {"token", "refresh_token", "enabled", "quota", "expiry", "disabled"}
+)
+
+
+def persist_revision() -> int:
+    """返回本进程内账号文件成功原子写入的世代。"""
+    with _persist_revision_lock:
+        return _persist_revision
+
+
+def _bump_persist_revision() -> None:
+    global _persist_revision
+    with _persist_revision_lock:
+        _persist_revision += 1
+
+
+def _persist_lock_for(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _persist_locks_guard:
+        return _persist_locks.setdefault(key, threading.Lock())
+
+
+@contextmanager
+def _locked_account_file(path: Path) -> Iterator[None]:
+    """同进程线程锁 + Unix advisory lock，串行化同一账号文件更新。"""
+    thread_lock = _persist_lock_for(path)
+    with thread_lock:
+        lock_path = path.with_name(f".{path.name}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            os.chmod(lock_path, 0o600)
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """用同目录临时文件 + fsync + replace 原子写入，并强制凭据权限为 0600。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+        os.chmod(path, 0o600)
+        try:
+            dir_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass  # 部分文件系统不允许对目录 fsync；文件本身仍已原子替换。
+        _bump_persist_revision()
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
 
 # token 型后端：CLI 直接认一个环境变量里的 token，注入不同 token 即切换账号。
 # （codex / antigravity 不在此列——它们没有「一个 token 变量搞定」的入口，靠 _HOME_ENV 目录隔离。）
@@ -74,6 +162,8 @@ _ENV_FALLBACK: dict[str, str] = {
     "copilot": "COPILOT_GITHUB_TOKEN",
 }
 
+_KNOWN_BACKENDS = frozenset({"claude", "codex", "grok", "copilot", "antigravity"})
+
 
 @dataclass
 class Account:
@@ -84,6 +174,9 @@ class Account:
     refresh_token: str = ""
     home: str = ""                   # 该账号独立的登录态目录（目录型后端用，注入 CODEX_HOME / HOME 等）
     extra_env: dict = field(default_factory=dict)  # 账号 JSON 里 "env": {...} 的任意补充环境变量
+    # Codex 账号按各自 CODEX_HOME/models_cache.json 暴露模型能力。
+    # None 表示目录没有可读缓存（为兼容旧安装，不据此拦截）；空集合表示缓存有效但没有 list 模型。
+    supported_models: Optional[frozenset[str]] = None
     enabled: bool = True
 
     # ── 路由权重（主备号）──────────────────────────────────────────────────
@@ -116,6 +209,49 @@ class Account:
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _cooling_until: float = field(default=0.0, init=False, repr=False)
     _error_count: int = field(default=0, init=False, repr=False)
+    _credential_generation: tuple[str, str, str, str, str, str] = field(
+        default=("", "", "", "", "", ""), init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        self._capture_credential_generation()
+
+    def _capture_credential_generation(self) -> None:
+        """捕获加载时凭据世代，仅用于 reload 合并临时冷却/租约。"""
+        credential_file = ""
+        if self.home:
+            relative: Optional[Path] = None
+            if self.backend == "codex":
+                relative = Path("auth.json")
+            elif self.backend == "antigravity":
+                relative = (
+                    Path(".gemini")
+                    / "antigravity-cli"
+                    / "antigravity-oauth-token"
+                )
+            if relative is not None:
+                path = Path(self.home).expanduser() / relative
+                try:
+                    info = path.stat()
+                    credential_file = ":".join(
+                        str(value)
+                        for value in (
+                            info.st_dev,
+                            info.st_ino,
+                            info.st_mtime_ns,
+                            info.st_size,
+                        )
+                    )
+                except OSError:
+                    credential_file = "missing"
+        self._credential_generation = (
+            self.source_path,
+            self.home,
+            self.token,
+            self.refresh_token,
+            json.dumps(self.extra_env, ensure_ascii=False, sort_keys=True, default=str),
+            credential_file,
+        )
 
     @property
     def is_cooling(self) -> bool:
@@ -187,6 +323,21 @@ class Account:
             env.update(self.extra_env)
         return env
 
+    def supports_model(self, model: str) -> bool:
+        """当前账号是否能执行目标模型。
+
+        目前只有 Codex 的订阅模型与登录账号强绑定，并且 CLI 会把账号可见模型
+        缓存在各自 ``CODEX_HOME/models_cache.json``。其它 backend、未指定模型、
+        或没有可读缓存时保持向后兼容，允许调度器继续尝试。
+        """
+        if self.backend != "codex" or not model or self.supported_models is None:
+            return True
+        chosen = model.strip()
+        if chosen.startswith("codex/"):
+            chosen = chosen.removeprefix("codex/")
+        chosen = chosen.split("@", 1)[0]
+        return chosen in self.supported_models
+
     @property
     def cooling_seconds(self) -> int:
         """距冷却结束还剩多少秒（非冷却中为 0）。供 UI 展示倒计时。"""
@@ -219,71 +370,85 @@ class Account:
             "expiry": self.expiry,
             "priority": self.priority,
             "weight": self.weight,
+            "supported_models": sorted(self.supported_models) if self.supported_models is not None else None,
             "error_count": self._error_count,
             "quota": self.quota,
             "quota_error": self.quota_error,
             "quota_updated_at": self.quota_updated_at,
         }
 
-    def persist(self) -> None:
-        """把当前 token / expiry / 禁用状态写回来源 JSON 文件（合并写，保留其它字段）。
+    def persist(self, fields: Optional[Iterable[str]] = None) -> bool:
+        """按字段补丁原子写回来源 JSON，避免旧 Account 覆盖新凭据。
 
         env 兜底账号（无 source_path）静默跳过。供刷新成功后落盘新 token、
         以及 disable()/clear_disabled() 后持久化禁用态使用，重启后状态不丢。
+        内部调用应传 ``fields``；无参保留给兼容调用，表示写入所有已知状态。
         """
         if not self.source_path:
-            return
+            return False
+        selected = _PERSIST_FIELDS if fields is None else frozenset(fields)
+        unknown = selected - _PERSIST_FIELDS
+        if unknown:
+            raise ValueError(f"未知持久化字段：{', '.join(sorted(unknown))}")
         path = Path(self.source_path)
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                data = {}
-        except (OSError, json.JSONDecodeError):
-            data = {}
+            with _locked_account_file(path):
+                if path.exists():
+                    try:
+                        data = json.loads(path.read_text(encoding="utf-8"))
+                    except (UnicodeError, json.JSONDecodeError) as exc:
+                        logger.error("拒绝覆盖损坏的账号 JSON %s：%s", path, exc)
+                        return False
+                    if not isinstance(data, dict):
+                        logger.error("拒绝覆盖非对象账号 JSON：%s", path)
+                        return False
+                else:
+                    logger.warning("账号文件已不存在，拒绝由旧快照重建：%s", path)
+                    return False
 
-        data["type"] = self.backend
-        if self.token:
-            data["token"] = self.token
-            # 文件原本用 access_token / accessToken（codex/claude 等）时同步更新，避免刷新后残留旧 token
-            if "access_token" in data:
-                data["access_token"] = self.token
-            if "accessToken" in data:
-                data["accessToken"] = self.token
-        if self.refresh_token:
-            data["refresh_token"] = self.refresh_token
-            if "refreshToken" in data:
-                data["refreshToken"] = self.refresh_token
-        data["enabled"] = self.enabled
+                data["type"] = self.backend
+                if "token" in selected and self.token:
+                    data["token"] = self.token
+                    # 同步原文件采用的兼容字段，避免刷新后残留旧 token。
+                    if "access_token" in data:
+                        data["access_token"] = self.token
+                    if "accessToken" in data:
+                        data["accessToken"] = self.token
+                if "refresh_token" in selected and self.refresh_token:
+                    data["refresh_token"] = self.refresh_token
+                    if "refreshToken" in data:
+                        data["refreshToken"] = self.refresh_token
+                if "enabled" in selected:
+                    data["enabled"] = self.enabled
 
-        # 额度快照：有则落盘，供重启后立即展示；失败原因一并保留
-        if self.quota is not None:
-            data["quota"] = self.quota
-        if self.quota_error:
-            data["quota_error"] = self.quota_error
-        else:
-            data.pop("quota_error", None)
-        if self.quota_updated_at:
-            data["quota_updated_at"] = self.quota_updated_at
-        if self.expiry:
-            data["expiry"] = (
-                datetime.fromtimestamp(self.expiry, tz=timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
-        # 禁用态：有原因就写，解除时清掉，避免残留误判
-        if self.disabled_reason:
-            data["disabled_reason"] = self.disabled_reason
-            data["disabled_at"] = self.disabled_at
-        else:
-            data.pop("disabled_reason", None)
-            data.pop("disabled_at", None)
+                if "quota" in selected:
+                    if self.quota is not None:
+                        data["quota"] = self.quota
+                    if self.quota_error:
+                        data["quota_error"] = self.quota_error
+                    else:
+                        data.pop("quota_error", None)
+                    if self.quota_updated_at:
+                        data["quota_updated_at"] = self.quota_updated_at
+                if "expiry" in selected and self.expiry:
+                    data["expiry"] = (
+                        datetime.fromtimestamp(self.expiry, tz=timezone.utc)
+                        .isoformat()
+                        .replace("+00:00", "Z")
+                    )
+                if "disabled" in selected:
+                    if self.disabled_reason:
+                        data["disabled_reason"] = self.disabled_reason
+                        data["disabled_at"] = self.disabled_at
+                    else:
+                        data.pop("disabled_reason", None)
+                        data.pop("disabled_at", None)
 
-        try:
-            path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
-        except OSError:
-            pass  # 写回失败不致命：内存态仍生效，下次仍会尝试
+                _atomic_write_json(path, data)
+            return True
+        except OSError as exc:
+            logger.error("账号状态写回失败 %s：%s", path, exc)
+            return False
 
 
 # ── 认证文件加载 ──────────────────────────────────────────────────────────────
@@ -317,19 +482,64 @@ def _parse_expiry_ts(value: object) -> float:
     return parsed.timestamp()
 
 
+def _coerce_int(value: object, default: int) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(str(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def _looks_placeholder(token: str) -> bool:
     """模板里没替换的占位 token（YOUR_XXX_TOKEN…）——入池只会白吃一次失败+冷却。"""
     upper = token.upper()
     return upper.startswith("YOUR_") or upper.startswith("<YOUR") or "XXXXX" in upper
 
 
+def _codex_models_from_home(home: str) -> Optional[frozenset[str]]:
+    """读取一个 Codex profile 的 list-visible 模型集合。
+
+    返回 None 表示缓存缺失/损坏，调度层会保持旧行为；有效缓存即使没有模型也
+    返回空集合，从而避免把明确不支持目标模型的账号送进 CLI 白白失败。
+    """
+    if not home:
+        return None
+    cache = Path(home).expanduser() / "models_cache.json"
+    try:
+        payload = json.loads(cache.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    raw_models = payload.get("models", []) if isinstance(payload, dict) else payload
+    if not isinstance(raw_models, list):
+        return None
+    models: set[str] = set()
+    for item in raw_models:
+        if not isinstance(item, dict) or item.get("visibility", "list") != "list":
+            continue
+        model_id = str(item.get("slug") or item.get("id") or "").strip()
+        if model_id:
+            models.add(model_id)
+    return frozenset(models)
+
+
 def _account_from_file(path: Path) -> Optional[Account]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        logger.warning("跳过无法解析的账号文件：%s", path)
+        return None
+    if not isinstance(data, dict):
+        logger.warning("跳过非 JSON object 账号文件：%s", path)
         return None
     backend = str(data.get("type", "")).strip().lower()
-    if not backend:
+    if backend not in _KNOWN_BACKENDS:
+        logger.warning("跳过未知 backend 账号文件 %s：%r", path, backend)
         return None
     # 兼容多种 token 字段写法：token / access_token / accessToken（Claude Code 凭据格式）/ key
     token = str(
@@ -346,10 +556,30 @@ def _account_from_file(path: Path) -> Optional[Account]:
         home = str(Path(home).expanduser())
     raw_env = data.get("env")
     extra_env = {str(k): str(v) for k, v in raw_env.items()} if isinstance(raw_env, dict) else {}
-    # 既无 token 也无 home 也无 env → 这条目没有任何可注入信息，跳过（占位符文件不会污染池子）。
-    if not token and not home and not extra_env:
-        return None
+    home_key = _HOME_ENV.get(backend)
+    if home_key:
+        effective_home = str(extra_env.get(home_key, "")).strip() or home
+        if effective_home:
+            home = str(Path(effective_home).expanduser())
+            if home_key in extra_env:
+                extra_env[home_key] = home
+    token_key = _TOKEN_ENV.get(backend)
+    effective_token = (
+        str(extra_env.get(token_key, "")).strip() if token_key else ""
+    ) or token
+
+    authentication_error = ""
+    if backend in {"codex", "antigravity"} and not home:
+        authentication_error = f"{backend} 账号必须配置隔离 profile home"
+    elif backend == "claude" and not (effective_token or home):
+        authentication_error = "claude 账号需要 token 或 CLAUDE_CONFIG_DIR"
+    elif backend in {"grok", "copilot"} and not effective_token:
+        authentication_error = f"{backend} 账号缺少可注入 token"
+
     disabled_reason = str(data.get("disabled_reason", "")).strip()
+    if authentication_error:
+        disabled_reason = f"configuration_error: {authentication_error}"
+        logger.warning("账号配置将保留为禁用项 %s：%s", path, authentication_error)
     return Account(
         backend=backend,
         id=str(data.get("email", path.stem)),
@@ -357,17 +587,18 @@ def _account_from_file(path: Path) -> Optional[Account]:
         refresh_token=str(data.get("refresh_token") or data.get("refreshToken") or ""),
         home=home,
         extra_env=extra_env,
+        supported_models=_codex_models_from_home(home) if backend == "codex" else None,
         # disabled_reason 落盘后，重启仍视为禁用（除非用户手动改 enabled / 删原因）
         enabled=bool(data.get("enabled", True)) and not disabled_reason,
         expiry=_parse_expiry_ts(data.get("expiry", data.get("expires_at"))),
         disabled_reason=disabled_reason,
-        disabled_at=float(data.get("disabled_at", 0.0) or 0.0),
-        priority=int(data.get("priority", 0) or 0),
-        weight=max(1, int(data.get("weight", 1) or 1)),
+        disabled_at=_coerce_float(data.get("disabled_at", 0.0)),
+        priority=_coerce_int(data.get("priority", 0), 0),
+        weight=max(1, _coerce_int(data.get("weight", 1), 1)),
         source_path=str(path),
         quota=data.get("quota") if isinstance(data.get("quota"), dict) else None,
         quota_error=str(data.get("quota_error", "")),
-        quota_updated_at=float(data.get("quota_updated_at", 0.0) or 0.0),
+        quota_updated_at=_coerce_float(data.get("quota_updated_at", 0.0)),
     )
 
 
@@ -418,23 +649,39 @@ def load_accounts(backend: Optional[str] = None) -> list[Account]:
 
 def save_account(account: Account, name: Optional[str] = None) -> Path:
     """把账号信息写入 AUTH_DIR（供命令行注册账号使用）。"""
-    AUTH_DIR.mkdir(parents=True, exist_ok=True)
-    stem = name or f"{account.backend}_{account.id.replace('@', '_').replace('.', '_')}"
-    path = AUTH_DIR / f"{stem}.json"
+    AUTH_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    AUTH_DIR.chmod(0o700)
+    if name is not None:
+        stem = name.strip()
+        if (
+            not stem
+            or stem in {".", ".."}
+            or re.fullmatch(r"[A-Za-z0-9_.-]+", stem) is None
+        ):
+            raise ValueError("account name 只能包含字母、数字、_ . -")
+    else:
+        raw_stem = f"{account.backend}_{account.id}"
+        stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_stem).strip("._")
+        if not stem:
+            raise ValueError("无法从 account backend/id 生成安全文件名")
+
+    auth_root = AUTH_DIR.resolve()
+    candidate = auth_root / f"{stem}.json"
+    if candidate.is_symlink():
+        raise ValueError(f"拒绝覆盖符号链接账号文件：{candidate}")
+    path = candidate.resolve()
+    if path.parent != auth_root:
+        raise ValueError(f"账号文件越出 AUTH_DIR：{path}")
     account.source_path = str(path)
-    path.write_text(
-        json.dumps(
-            {
-                "type": account.backend,
-                "email": account.id,
-                "token": account.token,
-                "refresh_token": account.refresh_token,
-                "home": account.home,
-                "enabled": account.enabled,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    account._capture_credential_generation()
+    data = {
+        "type": account.backend,
+        "email": account.id,
+        "token": account.token,
+        "refresh_token": account.refresh_token,
+        "home": account.home,
+        "enabled": account.enabled,
+    }
+    with _locked_account_file(path):
+        _atomic_write_json(path, data)
     return path

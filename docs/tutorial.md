@@ -37,17 +37,18 @@ clipool 做的事:
         ▼
 ┌──────────────────────────────┐
 │  clipool (127.0.0.1:8318)    │
-│  1. 解析模型串,路由到对应 CLI  │
+│  1. 解析模型串,路由到对应后端  │
 │  2. 从账号池选一个可用账号     │
-│  3. 注入该账号的环境变量       │──► spawn 子进程: claude -p / codex exec / agy --print ...
+│  3. 注入该账号的环境变量       │──► 本地 CLI；Antigravity Messages 可先走 HTTP 快路径
 │  4. 失败自动冷却、换号重试     │
 └──────────────────────────────┘
 ```
 
 两个关键词:
 
-- **驱动真实 CLI**:不逆向上游 API,而是把你本机已登录的订阅 CLI 当后端。
-  CLI 官方怎么变,它就怎么跟。
+- **CLI-first**:主要把本机已登录的订阅 CLI 当后端。Antigravity
+  `/v1/messages` 会先尝试 profile token 的 Cloud Code Assist HTTP 快路径，
+  失败再回退 `agy --print`。
 - **多账号轮换**:同一服务的多个账号(例如两个 Claude 订阅)自动 round-robin,
   某个账号额度耗尽自动冷却、切换下一个,全部恢复后自动回来。
 
@@ -104,8 +105,9 @@ pip install -e ".[dev]"        # pytest 等开发依赖
 
 ## 4. 第一次启动:零配置试跑
 
-**还没配置任何账号也能跑**——某个后端一个账号文件都没有时,clipool 直接用
-你本机 CLI 当前的默认登录态(称为"单账号模式")。
+Claude、Codex、Grok、Copilot 在完全没有对应账号文件时，可以尝试本机 CLI 当前
+默认登录态（“单账号模式”）。**Antigravity 是安全例外**：必须先按第 5.3 节注册
+受管隔离 profile；clipool 绝不会把 `agy` 指向服务进程的默认 HOME。
 
 ```bash
 # 启动服务(默认 127.0.0.1:8318)
@@ -160,14 +162,18 @@ curl http://127.0.0.1:8318/v1/chat/completions \
 
 - **文件名随意**,`.json` 结尾即可;文件里的 `"type"` 字段决定属于哪个后端。
 - **同一后端多个文件 = 自动轮换**。
-- token 还是占位符(`YOUR_...`、`XXXXX`)的文件**不会入池**,不用担心没填完的模板捣乱。
+- 已知 backend 的有效 JSON 若缺少真正可用的认证，或 token 仍是 `YOUR_...`、
+  `XXXXX` 等占位符，会以 `configuration_error` 禁用项**保留在池中**，阻断默认
+  登录态回落；修好 JSON 后 reload，不能从面板强行启用。
+- 未知 backend、损坏 JSON 和非 object JSON 会跳过。
 - 建议 `chmod 600 ~/.clipool/*.json` 保护令牌。
 
 账号按**类型**分两种配置方式,别搞混:
 
 | 类型 | 后端 | 原理 |
 |------|------|------|
-| **token 型** | claude / grok / copilot | JSON 里直接放 access token,调 CLI 时注入对应环境变量 |
+| **token 型** | grok / copilot | JSON 里必须放可注入 access token |
+| **token / 目录型** | claude | 注入 token，或把 `CLAUDE_CONFIG_DIR` 指向隔离 profile |
 | **目录型** | codex / antigravity | 每个账号一个独立的登录态目录,调 CLI 时把 `HOME` / `CODEX_HOME` 指过去 |
 
 ### 5.2 token 型后端:claude / grok / copilot
@@ -197,6 +203,16 @@ grok / copilot 同理:
 
 > 💡 **只有一个账号时可以不建文件**,直接在项目根目录 `.env` 里写
 > `CLAUDE_CODE_OAUTH_TOKEN=...` 或 `COPILOT_GITHUB_TOKEN=...` 即可。
+
+Claude 也可不用 token，在账号 JSON 里写独立配置目录：
+
+```json
+{"type":"claude","email":"work-profile","home":"~/.clipool/profiles/claude_work"}
+```
+
+这里的 `home` 会作为 `CLAUDE_CONFIG_DIR` 注入。认证要求汇总：Codex/Antigravity
+必须有对应隔离 home（也可写 `env.CODEX_HOME` / `env.HOME`），Grok/Copilot 必须
+有 token，Claude 必须有 token 或 `CLAUDE_CONFIG_DIR`。
 
 ### 5.3 目录型后端:antigravity / codex(HOME 隔离)
 
@@ -230,6 +246,16 @@ EOF
 > 否则 clipool 会直接报「账号未登录」并跳过该账号——它**绝不会**让 `agy`
 > 进入交互式登录、也不会弹浏览器,避免误刷别的账号。
 
+在 macOS 上，CLI fallback 会为 `CLIPOOL_AUTH_DIR/profiles/` 下的每个虚拟
+profile 创建随机名称、随机机器密码的专用 keychain。密码和相对路径只写入
+`.clipool-keychain.json`（`0600`）；profile、`Library/Keychains` 与
+`Library/Preferences` 为 `0700`，default/search list 只指向该专用 keychain。
+已有 `login.keychain-db` 不使用、不修改。损坏的专用 keychain 或状态会先可恢复
+归档再重建；真实 HOME、未标记外部目录、目录 symlink、缺失 HOME 或任一准备错误
+都会在 `agy` 启动前中止，因此没有密码框需要输入。默认 `profiles/` 之外仅允许
+`.clipool-managed-profile` 内容精确为 `clipool isolated profile v1` 的专用目录。
+详见 [账号配置指南](./accounts.md)。
+
 **Codex** 同理,用 `CODEX_HOME`:
 
 ```bash
@@ -240,6 +266,12 @@ CODEX_HOME="$HOME/.clipool/profiles/codex_personal" codex login
 ```json
 {"type": "codex", "email": "you@example.com", "home": "~/.clipool/profiles/codex_personal"}
 ```
+
+Codex 通过代理调用时默认使用权限为 `0700` 的临时 HOME/CWD、clean env、只读
+sandbox、ephemeral 会话并忽略用户配置/规则。它仍须读取所选 `CODEX_HOME`
+中的认证状态，也可能读取 sandbox 允许的其它本地文件；这不是多租户或机密性
+沙箱，只适合可信本地服务。只有完全信任调用方时才设置
+`CLIPOOL_CODEX_UNSAFE=1` 关闭这些默认限制。
 
 ### 5.4 进阶字段:主备与加权
 
@@ -273,6 +305,12 @@ curl -X POST http://127.0.0.1:8318/v0/management/reload   # 免重启
 # 或直接重启 python -m clipool
 ```
 
+reload 会离线构建完整快照再原子切换请求世代；旧 Account 请求随后返回的结果会被
+忽略。读取期间若 revision 已因持久化状态更新而变化，旧快照也会丢弃并重读。
+同凭据世代的账号会继承 cooldown、`error_count` 与正在占用的 probe lease；token、
+home、认证文件或注入 env 改变时视为新凭据，不继承这些运行态。无论是否继承，
+reload 前旧对象的迟到结果始终无效。
+
 配好后刷新面板 <http://127.0.0.1:8318/>,应能看到所有账号绿灯 🟢。
 
 更完整的账号文件字段说明见 [accounts.md](./accounts.md)。
@@ -296,7 +334,8 @@ copilot/gpt-4.1@medium       → Copilot CLI
 `grok-*`→grok、`gemini-*`→antigravity。也兼容 CLIProxyAPI 的括号风格
 `claude/sonnet(high)`。完整规则见 [README_CN](../README_CN.md#模型字符串格式)。
 
-`GET /v1/models` 可以列出当前可用的模型串。
+`GET /v1/models` 返回每个 backend 的默认能力项，以及从已加载 Codex profile
+的 `models_cache.json` 发现的模型和支持账号数。它不是全部上游模型的实时清单。
 
 ---
 
@@ -418,7 +457,9 @@ curl http://127.0.0.1:8318/health                                # 健康检查
 |---------|------|
 | 额度耗尽 / 429 限速 | 冷却 60s 起,连续失败指数翻倍,封顶 1 小时 |
 | 超时 / 5xx / 连接错误 | 冷却 15s 起,指数翻倍,封顶 5 分钟 |
-| 认证失效(invalid_grant / 401) | **永久禁用并写回文件**(重启不再死磕);600s 后允许放行一次探测,外部修好 token 就自动复活 |
+| `invalid_grant` | **永久禁用并写回文件**；600s 后至多一个租约探测，成功才复活 |
+| 一般 HTTP 401、token 撤销、人工禁用 | **永久禁用并写回文件**；需人工修复/启用，不自动探测 |
+| `configuration_error` | 保留为禁用项以阻断默认登录态；修 JSON 后 reload，不能直接启用 |
 
 成功一次即清零计数。**池里有账号但全部冷却/禁用时会直接报错**,
 绝不静默回落到 CLI 默认登录态(防止偷用别的账号额度)。
@@ -429,10 +470,13 @@ curl http://127.0.0.1:8318/health                                # 健康检查
 
 ```bash
 export CLIPOOL_API_KEY="your-local-secret"
-python -m clipool
+python -m clipool --host 0.0.0.0
 ```
 
-之后所有请求需带 `Authorization: Bearer your-local-secret`(或 `x-api-key` 头)。
+之后生成接口、`/v1/models` 和全部 `/v0/management/*` 请求需带
+`Authorization: Bearer your-local-secret`(或 `x-api-key` 头)。面板外壳、
+`/health` 保持公开，方便先加载页面再输入 key。
+绑定非 loopback 地址但未设置 key 时，clipool 会拒绝启动。
 
 ---
 
@@ -466,9 +510,9 @@ reply = run_with_pool("claude", "你好", model="sonnet", effort="high")
 看面板确认哪些账号冷却、多久恢复;要立即恢复某账号,用管理 API 的 `reset`。
 
 **Q:antigravity 账号报「未登录」/ 担心弹浏览器**
-`home` 指向的 profile 里没有 `antigravity-oauth-token` 文件。clipool 只会跳过
-该账号、**不会**触发交互式登录。按 [5.3 节](#53-目录型后端antigravity--codexhome-隔离)
-重新登录该 profile 即可。
+`home` 缺失，或 profile 的 `antigravity-oauth-token` 缺失、损坏、被链接/逃逸、
+没有非空 `access_token`。clipool 会 fail closed，**不会**触发交互式登录。按
+[5.3 节](#53-目录型后端antigravity--codexhome-隔离)修复受管 profile 后 reload。
 
 **Q:请求的模型名 CLI 不认(unknown model id)**
 grok / copilot 的可用模型随订阅变化。clipool 检测到这类错误会**自动回退到该 CLI
@@ -480,7 +524,8 @@ grok / copilot 的可用模型随订阅变化。clipool 检测到这类错误会
 
 **Q:响应很慢**
 每次请求 spawn 一个 CLI 子进程,冷启动 + 模型思考都算在内。超时默认 600s,
-可用 `AGENT_LLM_CLI_TIMEOUT` 调整。追求低延迟/高吞吐,考虑 Go 版 CLIProxyAPI
+可用 `AGENT_LLM_CLI_TIMEOUT` 调整。Unix 上超时会终止完整 CLI 进程组（含孙进程）；
+Windows 仅能尽力终止直接子进程。追求低延迟/高吞吐,考虑 Go 版 CLIProxyAPI
 的直连路线(见 README 对比表)。
 
 **Q:能和 Go 版 CLIProxyAPI 共用 `~/.cli-proxy-api/` 目录吗?**

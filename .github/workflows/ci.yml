@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install project and development tools
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Tests and coverage
+        run: python -m coverage run -m pytest -q && python -m coverage report --fail-under=60
+      - name: Ruff
+        run: python -m ruff check .
+      - name: Mypy
+        run: python -m mypy clipool
+
+  package:
+    name: Build and installed-wheel smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install build tools
+        run: python -m pip install --upgrade pip && python -m pip install ".[dev]"
+      - name: Build sdist and wheel
+        run: python -m build
+      - name: Install wheel
+        run: python -m pip install --no-deps --force-reinstall dist/*.whl
+      - name: Smoke-test dashboard outside the source tree
+        working-directory: /tmp
+        run: >-
+          python -c "from fastapi.testclient import TestClient;
+          from clipool.server import app;
+          response = TestClient(app).get('/');
+          assert response.status_code == 200, response.text;
+          assert 'clipool' in response.text.lower()"

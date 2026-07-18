@@ -11,11 +11,25 @@
   copilot/gpt-4.1@medium             → GitHub Copilot CLI
 """
 import argparse
+import ipaddress
+import os
 
 import uvicorn
 
 from .config import DEFAULT_PORT
-from .server import app
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return whether uvicorn will bind to an explicitly local-only address."""
+    normalized = host.strip().lower()
+    if normalized.rstrip(".") == "localhost":
+        return True
+    if normalized.startswith("[") and normalized.endswith("]"):
+        normalized = normalized[1:-1]
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 def main() -> None:
@@ -30,10 +44,18 @@ def main() -> None:
     parser.add_argument("--reload", action="store_true", help="代码变更时自动重载（开发用）")
     args = parser.parse_args()
 
+    if not _is_loopback_host(args.host) and not os.environ.get(
+        "CLIPOOL_API_KEY", ""
+    ).strip():
+        parser.error(
+            "绑定非 loopback 地址时必须先设置 CLIPOOL_API_KEY，"
+            "否则管理 API 会暴露到网络"
+        )
+
     print(f"clipool API  →  http://{args.host}:{args.port}/v1")
     print(f"账号状态面板   →  http://{args.host}:{args.port}/")
-    print(f"支持后端：claude / codex / grok / antigravity / copilot")
-    print(f"模型格式：<backend>/<model>@<effort>，如 claude/sonnet@high")
+    print("支持后端：claude / codex / grok / antigravity / copilot")
+    print("模型格式：<backend>/<model>@<effort>，如 claude/sonnet@high")
     print()
 
     uvicorn.run(

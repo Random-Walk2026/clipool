@@ -16,10 +16,20 @@ from typing import Any, Optional
 
 import requests
 
-from ..account import Account, REFRESH_SKEW_SECONDS
+from ..account import (
+    Account,
+    REFRESH_SKEW_SECONDS,
+    _atomic_write_json,
+    _locked_account_file,
+)
 from ..anthropic import AnthropicMessagesRequest, messages_to_prompt
 from ..config import CLI_TIMEOUT
-from .antigravity import AntigravityProvider, resolve_variant
+from ..version import __version__
+from .antigravity import (
+    AntigravityProvider,
+    resolve_variant,
+    validated_profile_token_file,
+)
 
 TOKEN_RELATIVE_PATH = Path(".gemini") / "antigravity-cli" / "antigravity-oauth-token"
 DEFAULT_ENDPOINTS = (
@@ -51,7 +61,10 @@ def _parse_expiry(value: Any) -> Optional[datetime]:
         return None
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
-    parsed = datetime.fromisoformat(text)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise RuntimeError("Antigravity token expiry is not valid ISO8601") from exc
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
@@ -64,12 +77,10 @@ def token_file_for_home(home: str | os.PathLike[str]) -> Path:
 def load_antigravity_profile_token(home: str | os.PathLike[str]) -> AntigravityProfileToken:
     """Load Antigravity OAuth token JSON from an isolated profile home."""
 
-    path = token_file_for_home(home)
+    path = validated_profile_token_file(str(home))
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise RuntimeError(f"Antigravity token file not found: {path}") from exc
-    except json.JSONDecodeError as exc:
+    except (UnicodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Antigravity token file is not valid JSON: {path}") from exc
 
     token_data = raw.get("token", raw) if isinstance(raw, dict) else {}
@@ -92,19 +103,32 @@ def load_antigravity_profile_token(home: str | os.PathLike[str]) -> AntigravityP
 def _write_refreshed_token(current: AntigravityProfileToken, payload: dict[str, Any]) -> AntigravityProfileToken:
     if current.path is None:
         raise RuntimeError("Cannot persist refreshed Antigravity token without token path")
+    profile_home = current.path.parents[2]
+    safe_path = validated_profile_token_file(str(profile_home))
+    if safe_path != current.path.resolve():
+        raise RuntimeError("Antigravity token path changed during refresh; refusing write")
 
-    expires_in = int(payload.get("expires_in", 3600))
-    expiry = datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc)
+    try:
+        expires_in = int(payload.get("expires_in", 3600))
+        access_token = str(payload["access_token"]).strip()
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError("Antigravity refresh response is missing valid token fields") from exc
+    if not access_token:
+        raise RuntimeError("Antigravity refresh response contains an empty access_token")
+    try:
+        expiry = datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError) as exc:
+        raise RuntimeError("Antigravity refresh response has invalid expires_in") from exc
     token_data = {
-        "access_token": str(payload["access_token"]),
+        "access_token": access_token,
         "token_type": str(payload.get("token_type", current.token_type or "Bearer")),
         "refresh_token": str(payload.get("refresh_token", current.refresh_token)),
         "expiry": expiry.isoformat().replace("+00:00", "Z"),
     }
-    current.path.write_text(
-        json.dumps({"token": token_data, "auth_method": "oauth"}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    with _locked_account_file(current.path):
+        _atomic_write_json(
+            current.path, {"token": token_data, "auth_method": "oauth"}
+        )
     return AntigravityProfileToken(
         access_token=token_data["access_token"],
         refresh_token=token_data["refresh_token"],
@@ -142,7 +166,13 @@ def refresh_antigravity_profile_token(token: AntigravityProfileToken) -> Antigra
         raise RuntimeError(f"Antigravity token refresh connection failed: {exc}") from exc
     if response.status_code >= 400:
         raise RuntimeError(f"Antigravity token refresh failed: {response.status_code} {response.text[:300]}")
-    return _write_refreshed_token(token, response.json())
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Antigravity token refresh returned non-JSON data") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Antigravity token refresh returned an unexpected JSON shape")
+    return _write_refreshed_token(token, payload)
 
 
 def load_fresh_antigravity_token(home: str | os.PathLike[str]) -> AntigravityProfileToken:
@@ -158,9 +188,9 @@ def _headers(token: AntigravityProfileToken) -> dict[str, str]:
     return {
         "authorization": f"{token.token_type} {token.access_token}",
         "content-type": "application/json",
-        "user-agent": "clipool/2.0",
+        "user-agent": f"clipool/{__version__}",
         "x-client-name": "clipool",
-        "x-client-version": "2.0",
+        "x-client-version": __version__,
         "x-machine-id": os.environ.get("CLIPOOL_MACHINE_ID", uuid.uuid4().hex),
         "x-vscode-sessionid": os.environ.get("CLIPOOL_SESSION_ID", uuid.uuid4().hex),
     }
@@ -192,7 +222,14 @@ def _fetch_project_id(token: AntigravityProfileToken) -> str:
             last_error = f"connection error: {exc}"
             continue
         if response.status_code < 400:
-            data = response.json()
+            try:
+                data = response.json()
+            except ValueError:
+                last_error = "success response was not JSON"
+                continue
+            if not isinstance(data, dict):
+                last_error = "success response had an unexpected JSON shape"
+                continue
             project = str(data.get("cloudaicompanionProject", "")).strip()
             if project:
                 return project
@@ -269,7 +306,7 @@ class AntigravityHTTPProvider:
             new_expiry = token.expiry.timestamp()
             if new_expiry != account.expiry:
                 account.expiry = new_expiry
-                account.persist()
+                account.persist(fields={"expiry"})
         project_id = str(account.extra_env.get("ANTIGRAVITY_PROJECT_ID", "")).strip() or _fetch_project_id(token)
         # 直连 Cloud Code 时只在请求显式开 thinking 才折变体——上游对
         # claude-sonnet-4-6 这类 ID 没有独立 thinking 变体，硬编码 effort 会把
@@ -290,7 +327,15 @@ class AntigravityHTTPProvider:
                 last_error = f"connection error: {exc}"
                 continue
             if response.status_code < 400:
-                text = extract_text_from_generate_response(response.json())
+                try:
+                    payload = response.json()
+                except ValueError:
+                    last_error = "success response was not JSON"
+                    continue
+                if not isinstance(payload, dict):
+                    last_error = "success response had an unexpected JSON shape"
+                    continue
+                text = extract_text_from_generate_response(payload)
                 if text:
                     return text
                 raise RuntimeError("Antigravity response did not contain text")

@@ -89,7 +89,7 @@ class RefreshQuota(unittest.TestCase):
             "seven_day": {"utilization": 40, "resets_at": "2026-07-01T00:00:00Z"},
         }
         acc = self._claude()
-        with mock.patch.object(quota.requests, "get", return_value=_Resp(200, usage)) as get, \
+        with mock.patch.object(quota.requests, "get", return_value=_Resp(200, usage)), \
              mock.patch.object(quota.requests, "post") as post:
             q = quota.refresh_quota(acc)
         self.assertEqual(q["five_hour"]["used_percent"], 5)

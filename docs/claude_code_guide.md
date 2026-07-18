@@ -72,7 +72,7 @@ python -m clipool --port 8318
 
 ```bash
 curl http://127.0.0.1:8318/health
-# {"status":"ok","version":"2.0.0"}
+# {"status":"ok","version":"0.1.0"}
 
 curl http://127.0.0.1:8318/v0/management/accounts/antigravity
 ```
@@ -104,7 +104,9 @@ export ANTHROPIC_AUTH_TOKEN="your-local-secret"   # 与 CLIPOOL_API_KEY 一致
 claude --model claude-sonnet-4-6
 ```
 
-`CLIPOOL_API_KEY` 只在本地代理层校验，与 Google / Anthropic 无关。
+`CLIPOOL_API_KEY` 只在本地代理层校验，与 Google / Anthropic 无关。它保护
+`/v1/messages` 等生成接口、`/v1/models` 和全部 `/v0/management/*`；只有
+面板外壳与 `/health` 保持公开。
 
 ## 手动测试
 
@@ -145,6 +147,18 @@ find ~/.clipool/profiles/agy_main -name antigravity-oauth-token
 HOME="$HOME/.clipool/profiles/agy_main" agy -p "ping"
 ```
 
+**macOS 钥匙串弹窗**
+
+正常的 clipool CLI fallback 不应弹密码框：它只为
+`CLIPOOL_AUTH_DIR/profiles/` 下的虚拟 profile 创建随机名称、随机机器密码的专用
+keychain，并把该虚拟 HOME 的 default/search list 只指向它；状态保存在
+`.clipool-keychain.json`（`0600`），原有 `login.keychain-db` 不会动。使用默认目录
+之外的专用 profile 时，需要按账号指南写入内容精确的
+`.clipool-managed-profile` 标记。真实 HOME、未标记外部目录、Keychains 或
+Preferences 目录 symlink、缺失 HOME、损坏状态无法安全恢复或任一 `security`
+失败都会在 `agy` 启动前中止。详见
+[accounts.md](accounts.md#macos-虚拟-profile-钥匙串)。
+
 **账号额度打满**
 
 `clipool` 会把失败账号冷却一段时间，自动尝试下一个账号：
@@ -153,7 +167,9 @@ HOME="$HOME/.clipool/profiles/agy_main" agy -p "ping"
 curl http://127.0.0.1:8318/v0/management/accounts/antigravity
 ```
 
-`cooling: true` 表示该账号临时跳过，`disabled: true` 表示 token 彻底失效（需重新登录后等待自动恢复探测，或手动 reload）。
+`cooling: true` 表示该账号临时跳过。`disabled: true` 表示认证失效；只有
+`invalid_grant` 自动禁用会在约 10 分钟后尝试一次租约探测，一般 401、token
+撤销与人工禁用需修复登录态后手动启用或 reload。
 
 ## 当前能力范围
 
@@ -162,8 +178,9 @@ curl http://127.0.0.1:8318/v0/management/accounts/antigravity
 - `/v1/messages` 基础请求及 Anthropic SSE 响应
 - `/v1/messages/count_tokens` 轻量估算
 - Antigravity profile token 读取与自动刷新（提前 300s）
-- 多账号轮换、主备号路由（priority / weight）、失败冷却与永久禁用自愈
+- 多账号轮换、主备号路由（priority / weight）、失败冷却与 `invalid_grant` 租约探测
 - 直连失败时自动回退到 `agy --print`
+- macOS fallback 使用受管虚拟 profile 的随机专用 keychain；准备失败时 fail closed，不弹密码框
 - 管理 API：查看账号状态、热重载
 
 仍是 MVP：
